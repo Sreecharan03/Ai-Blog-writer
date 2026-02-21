@@ -1,0 +1,38 @@
+# Secrets & credentials — NEVER commit these
+.env
+.env.*
+*.env
+ai-blog-writer-sa-key.json
+*-sa-key.json
+*service-account*.json
+*credentials*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large binaries / Word docs with sensitive content
+Sighnal_Backend_High_Level_System_Plan.docx
+
+# Storage / local data
+storage/
+
+# Compiled
+rg/
+*.exe

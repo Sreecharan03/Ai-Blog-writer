@@ -1,0 +1,60 @@
+# Core API
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+python-dotenv
+
+# Auth / security
+python-jose
+passlib
+bcrypt
+
+# HTTP + URL ingestion
+httpx
+requests
+beautifulsoup4
+lxml
+readability-lxml
+
+# File parsing (PDF/DOCX/HTML)
+pypdf
+python-docx
+docx2txt
+
+# Data / text processing
+numpy
+pandas
+regex
+tqdm
+
+pdfminer
+# Database (Cloud SQL Postgres + pgvector)
+sqlalchemy
+psycopg2-binary
+pgvector
+alembic
+
+# Caching / background (lightweight; queue stored in DB)
+redis
+
+# Google Cloud Storage
+google-cloud-storage
+
+# Supabase (finance + logs)
+supabase
+
+# LLM + embeddings (Gemini)
+google-generativeai
+
+# Workflow orchestration (LangGraph)
+langgraph
+
+# QC metrics
+textstat
+
+# Observability / logging
+loguru
+
+# Optional: streaming / SSE support
+sse-starlette
