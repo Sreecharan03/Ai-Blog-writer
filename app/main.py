@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from app.api.health import router as health_router
 from app.api.db import router as db_router
 from app.api.auth import router as auth_router
@@ -18,6 +23,13 @@ from app.api.summarize import router as summarize_router
 from app.api.embed import router as embed_router
 from app.api.search import router as search_router
 from app.api.hybrid_search import router as hybrid_search_router
+from app.api.article_requests import router as article_requests_router
+from app.api.article_run import router as article_run_router
+from app.api.article_output import router as article_output_router
+from app.api.article_state import router as article_state_router
+from app.api.article_qc import router as article_qc_router
+from app.api.article_zerogpt import router as article_zerogpt_router
+from app.api.article_revise import router as article_revise_router
 
 APP_NAME = "Sighnal Backend"
 
@@ -46,8 +58,23 @@ def create_app() -> FastAPI:
     app.include_router(embed_router)
     app.include_router(search_router)
     app.include_router(hybrid_search_router)
+    app.include_router(article_requests_router)
+    app.include_router(article_run_router)
+    app.include_router(article_run_router)
+    app.include_router(article_output_router)
+    app.include_router(article_state_router)
+    app.include_router(article_qc_router)
+    app.include_router(article_zerogpt_router)
+    app.include_router(article_revise_router)   
 
+    # Serve the pipeline tester UI
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+        @app.get("/ui", include_in_schema=False)
+        def serve_ui():
+            return FileResponse(str(static_dir / "index.html"))
 
     return app
 

@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sighnal — Pipeline Tester</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="logo">
+      <span class="logo-icon">⚡</span>
+      <span class="logo-text">Sighnal</span>
+    </div>
+    <button class="sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">&#10094;</button>
+  </div>
+
+  <div class="sidebar-body">
+    <div class="config-group">
+      <label class="config-label">BASE URL</label>
+      <input type="text" id="cfgBase" class="cfg-input" placeholder="http://127.0.0.1:8000" />
+    </div>
+
+    <div class="config-group">
+      <label class="config-label">TENANT UUID</label>
+      <div class="input-with-badge">
+        <input type="text" id="cfgTenant" class="cfg-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+        <span class="badge badge-auto" id="tenantAutoTag" style="display:none;">auto</span>
+      </div>
+    </div>
+
+    <div class="config-group">
+      <label class="config-label">KB UUID</label>
+      <input type="text" id="cfgKb" class="cfg-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+    </div>
+
+    <div class="config-group">
+      <label class="config-label">ROLE</label>
+      <select id="cfgRole" class="cfg-input cfg-select">
+        <option value="tenant_admin">tenant_admin</option>
+        <option value="tenant_user">tenant_user</option>
+      </select>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="config-group">
+      <label class="config-label">JWT TOKEN</label>
+      <div class="token-wrap">
+        <input type="password" id="cfgToken" class="cfg-input cfg-token" placeholder="Auto-filled after login" />
+        <button class="token-eye" id="tokenEye" title="Show/hide token">👁</button>
+      </div>
+      <div class="token-status" id="tokenStatus"></div>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- Pipeline mini-progress in sidebar -->
+    <div class="pipeline-nav">
+      <div class="pipeline-nav-title">Pipeline Steps</div>
+      <div class="pipeline-step-nav" data-step="ingest">
+        <span class="step-dot" id="navDot-ingest"></span>
+        <span class="step-nav-label">Ingest</span>
+      </div>
+      <div class="pipeline-step-nav" data-step="preprocess">
+        <span class="step-dot" id="navDot-preprocess"></span>
+        <span class="step-nav-label">Preprocess</span>
+      </div>
+      <div class="pipeline-step-nav" data-step="chunk">
+        <span class="step-dot" id="navDot-chunk"></span>
+        <span class="step-nav-label">Chunk</span>
+      </div>
+      <div class="pipeline-step-nav" data-step="summarize">
+        <span class="step-dot" id="navDot-summarize"></span>
+        <span class="step-nav-label">Summarize</span>
+      </div>
+      <div class="pipeline-step-nav" data-step="embed">
+        <span class="step-dot" id="navDot-embed"></span>
+        <span class="step-nav-label">Embed</span>
+      </div>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="doc-id-display" id="docIdDisplay" style="display:none;">
+      <label class="config-label">ACTIVE DOC ID</label>
+      <div class="doc-id-val" id="activeDocId">—</div>
+    </div>
+  </div>
+</aside>
+
+<!-- Main content -->
+<main class="main" id="mainContent">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="btn-icon" id="mobileSidebarToggle" title="Toggle sidebar">☰</button>
+      <div class="topbar-title">Pipeline Tester</div>
+      <span class="topbar-sub">Upload → Ingest → Preprocess → Chunk → Summarize → Embed → Search</span>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-ghost btn-sm" id="btnHealth">⚡ Health</button>
+      <button class="btn btn-primary btn-sm" id="btnLogin">🔑 Login</button>
+      <div class="health-dots" id="healthDots">
+        <span class="health-dot" id="dotHealth" title="/health"></span>
+        <span class="health-dot" id="dotReady" title="/ready"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-tab="pipeline">🔧 Pipeline</button>
+    <button class="tab-btn" data-tab="search">🔍 Search</button>
+    <button class="tab-btn" data-tab="logs">📋 Logs</button>
+    <button class="tab-btn" data-tab="artifacts">📦 Artifacts</button>
+  </nav>
+
+  <!-- ======================== TAB: Pipeline ======================== -->
+  <div class="tab-pane active" id="tab-pipeline">
+
+    <!-- Upload zone -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">📁</span>
+        Upload Document
+      </div>
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-inner">
+          <div class="drop-icon">☁</div>
+          <div class="drop-text">Drag &amp; drop file here</div>
+          <div class="drop-sub">or</div>
+          <label class="btn btn-outline btn-sm" for="fileInput">Browse files</label>
+          <input type="file" id="fileInput" style="display:none;" />
+        </div>
+        <div class="file-preview" id="filePreview" style="display:none;">
+          <span class="file-icon">📄</span>
+          <span class="file-name" id="fileName"></span>
+          <span class="file-size" id="fileSize"></span>
+          <button class="file-remove" id="fileRemove" title="Remove file">✕</button>
+        </div>
+      </div>
+
+      <div class="doc-id-row">
+        <label class="config-label">DOC UUID (optional — skip if using a new file)</label>
+        <input type="text" id="docIdManual" class="cfg-input" placeholder="Paste existing doc_id to rerun steps" />
+      </div>
+    </div>
+
+    <!-- Pipeline steps -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">⚙</span>
+        Pipeline
+        <button class="btn btn-gradient btn-run-all" id="btnRunAll">▶ Run ALL (Ingest → Embed)</button>
+      </div>
+
+      <div class="steps-track">
+        <div class="steps-line"></div>
+        <div class="step-node" data-step="ingest">
+          <div class="step-circle" id="circle-ingest">1</div>
+          <div class="step-label">Ingest</div>
+        </div>
+        <div class="step-node" data-step="preprocess">
+          <div class="step-circle" id="circle-preprocess">2</div>
+          <div class="step-label">Preprocess</div>
+        </div>
+        <div class="step-node" data-step="chunk">
+          <div class="step-circle" id="circle-chunk">3</div>
+          <div class="step-label">Chunk</div>
+        </div>
+        <div class="step-node" data-step="summarize">
+          <div class="step-circle" id="circle-summarize">4</div>
+          <div class="step-label">Summarize</div>
+        </div>
+        <div class="step-node" data-step="embed">
+          <div class="step-circle" id="circle-embed">5</div>
+          <div class="step-label">Embed</div>
+        </div>
+      </div>
+
+      <div class="step-cards">
+        <!-- Ingest -->
+        <div class="step-card" id="card-ingest">
+          <div class="step-card-header">
+            <div class="step-card-title">
+              <span class="step-badge">1</span> Ingest File
+            </div>
+            <div class="step-card-actions">
+              <div class="spinner" id="spin-ingest"></div>
+              <button class="btn btn-primary btn-sm" id="btn-ingest">▶ Run</button>
+            </div>
+          </div>
+          <div class="step-card-meta" id="meta-ingest"></div>
+          <div class="step-response" id="resp-ingest"></div>
+        </div>
+
+        <!-- Preprocess -->
+        <div class="step-card" id="card-preprocess">
+          <div class="step-card-header">
+            <div class="step-card-title">
+              <span class="step-badge">2</span> Preprocess
+            </div>
+            <div class="step-card-actions">
+              <div class="spinner" id="spin-preprocess"></div>
+              <button class="btn btn-primary btn-sm" id="btn-preprocess">▶ Run</button>
+            </div>
+          </div>
+          <div class="step-card-meta" id="meta-preprocess"></div>
+          <div class="step-response" id="resp-preprocess"></div>
+        </div>
+
+        <!-- Chunk -->
+        <div class="step-card" id="card-chunk">
+          <div class="step-card-header">
+            <div class="step-card-title">
+              <span class="step-badge">3</span> Chunk
+            </div>
+            <div class="step-card-actions">
+              <div class="spinner" id="spin-chunk"></div>
+              <button class="btn btn-primary btn-sm" id="btn-chunk">▶ Run</button>
+            </div>
+          </div>
+          <div class="step-card-meta" id="meta-chunk"></div>
+          <div class="step-response" id="resp-chunk"></div>
+        </div>
+
+        <!-- Summarize -->
+        <div class="step-card" id="card-summarize">
+          <div class="step-card-header">
+            <div class="step-card-title">
+              <span class="step-badge">4</span> Summarize
+            </div>
+            <div class="step-card-actions">
+              <div class="spinner" id="spin-summarize"></div>
+              <button class="btn btn-primary btn-sm" id="btn-summarize">▶ Run</button>
+            </div>
+          </div>
+          <div class="step-card-meta" id="meta-summarize"></div>
+          <div class="step-response" id="resp-summarize"></div>
+        </div>
+
+        <!-- Embed -->
+        <div class="step-card" id="card-embed">
+          <div class="step-card-header">
+            <div class="step-card-title">
+              <span class="step-badge">5</span> Embed
+            </div>
+            <div class="step-card-actions">
+              <div class="spinner" id="spin-embed"></div>
+              <button class="btn btn-primary btn-sm" id="btn-embed">▶ Run</button>
+            </div>
+          </div>
+          <div class="step-card-meta" id="meta-embed"></div>
+          <div class="step-response" id="resp-embed"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== TAB: Search ======================== -->
+  <div class="tab-pane" id="tab-search">
+    <div class="section-card">
+      <div class="section-title"><span class="section-icon">🔍</span> Search</div>
+
+      <div class="search-form">
+        <div class="form-row">
+          <div class="form-group flex-2">
+            <label class="config-label">Query</label>
+            <textarea id="searchQuery" class="cfg-input search-textarea" rows="3" placeholder="What does this document talk about?">what does this document talk about?</textarea>
+          </div>
+          <div class="form-group flex-1">
+            <label class="config-label">DOC UUID (optional)</label>
+            <input type="text" id="searchDocId" class="cfg-input" placeholder="Restrict to one doc" />
+            <label class="config-label mt-8">Top K</label>
+            <div class="slider-row">
+              <input type="range" id="searchTopK" min="1" max="20" value="5" class="slider" />
+              <span class="slider-val" id="searchTopKVal">5</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="search-btns">
+          <button class="btn btn-primary" id="btnVecSearch">
+            <span>🧠 Vector Search</span>
+            <div class="spinner" id="spin-vecSearch"></div>
+          </button>
+          <button class="btn btn-gradient" id="btnHybridSearch">
+            <span>⚡ Hybrid Search</span>
+            <div class="spinner" id="spin-hybridSearch"></div>
+          </button>
+        </div>
+
+        <!-- Advanced hybrid options (collapsible) -->
+        <details class="advanced-opts">
+          <summary>Advanced hybrid options</summary>
+          <div class="advanced-grid">
+            <div class="form-group">
+              <label class="config-label">candidate_k</label>
+              <input type="number" id="hybridCandidateK" class="cfg-input" value="40" min="1" max="200" />
+            </div>
+            <div class="form-group">
+              <label class="config-label">alpha_vector</label>
+              <input type="number" id="hybridAlpha" class="cfg-input" value="0.75" min="0" max="1" step="0.05" />
+            </div>
+            <div class="form-group">
+              <label class="config-label">beta_keyword</label>
+              <input type="number" id="hybridBeta" class="cfg-input" value="0.25" min="0" max="1" step="0.05" />
+            </div>
+            <div class="form-group">
+              <label class="config-label">cache_ttl_s</label>
+              <input type="number" id="hybridTtl" class="cfg-input" value="300" min="0" />
+            </div>
+            <div class="form-group">
+              <label class="config-label">diversify</label>
+              <select id="hybridDiversify" class="cfg-input cfg-select">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="results-area" id="searchResults"></div>
+  </div>
+
+  <!-- ======================== TAB: Logs ======================== -->
+  <div class="tab-pane" id="tab-logs">
+    <div class="section-card">
+      <div class="section-title"><span class="section-icon">📋</span> Job Events Log</div>
+      <div class="logs-toolbar">
+        <div class="form-group">
+          <label class="config-label">Limit</label>
+          <div class="slider-row">
+            <input type="range" id="logLimit" min="10" max="200" value="50" class="slider" />
+            <span class="slider-val" id="logLimitVal">50</span>
+          </div>
+        </div>
+        <div class="logs-actions">
+          <button class="btn btn-primary btn-sm" id="btnLogRefresh">↺ Refresh</button>
+          <button class="btn btn-outline btn-sm" id="btnLogWatch" data-watching="0">▶ Watch (30s)</button>
+          <select id="logInterval" class="cfg-input cfg-select" style="width:90px;">
+            <option value="1">1s</option>
+            <option value="2" selected>2s</option>
+            <option value="3">3s</option>
+            <option value="5">5s</option>
+          </select>
+        </div>
+      </div>
+      <div class="log-watch-bar" id="logWatchBar" style="display:none;">
+        <div class="log-watch-progress" id="logWatchProgress"></div>
+        <span id="logWatchLabel">Watching... 30s</span>
+        <button class="btn btn-ghost btn-sm" id="btnLogStop">■ Stop</button>
+      </div>
+    </div>
+    <div class="log-feed" id="logFeed">
+      <div class="log-empty">Hit Refresh or Watch to load events.</div>
+    </div>
+  </div>
+
+  <!-- ======================== TAB: Artifacts ======================== -->
+  <div class="tab-pane" id="tab-artifacts">
+    <div class="section-card">
+      <div class="section-title"><span class="section-icon">📦</span> Summary Artifacts</div>
+      <div class="form-group">
+        <label class="config-label">GCS Summary URI (auto-filled after Summarize step)</label>
+        <input type="text" id="gcsUriInput" class="cfg-input" placeholder="gs://bucket/path/to/summary.json" />
+      </div>
+      <div class="artifact-note">
+        ℹ GCS download requires <code>google-cloud-storage</code> Python SDK on the server.
+        This panel displays the <code>gcs_summary_uri</code> from the Summarize response.
+      </div>
+      <div class="artifact-display" id="artifactDisplay"></div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- JSON Modal -->
+<div class="modal-overlay" id="modalOverlay" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="modalTitle">Response</span>
+      <button class="modal-close" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre class="json-block" id="modalJson"></pre>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
