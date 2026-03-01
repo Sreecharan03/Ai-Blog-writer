@@ -207,13 +207,71 @@ def _readability(text: str) -> Dict[str, float]:
 
     flesch = 206.835 - 1.015 * wps - 84.6 * spw
     fk_grade = 0.39 * wps + 11.8 * spw - 15.59
+
+    # Quality checks: repetition + section coverage
+    repetition_ratio = _repetition_ratio(text)
+    unique_sections = _count_unique_sections(text)
+
     return {
         "word_count": float(wc),
         "sentence_count": float(sc),
         "syllable_count": float(syll),
         "flesch_reading_ease": float(flesch),
         "flesch_kincaid_grade": float(fk_grade),
+        "repetition_ratio": float(repetition_ratio),
+        "unique_sections": float(unique_sections),
     }
+
+
+def _normalize_sentence(s: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace for comparison."""
+    s = re.sub(r"[^a-z0-9\s]", "", s.lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _repetition_ratio(text: str) -> float:
+    """Fraction of sentences that are duplicates or near-duplicates (>80% word overlap)."""
+    sentences = re.split(r"(?<=[.!?])\s+", text or "")
+    sentences = [s.strip() for s in sentences if len(s.strip().split()) >= 4]
+    if len(sentences) < 3:
+        return 0.0
+
+    normalized = [_normalize_sentence(s) for s in sentences]
+    dup_count = 0
+
+    for i in range(len(normalized)):
+        for j in range(i + 1, len(normalized)):
+            words_i = set(normalized[i].split())
+            words_j = set(normalized[j].split())
+            if not words_i or not words_j:
+                continue
+            overlap = len(words_i & words_j) / max(len(words_i | words_j), 1)
+            if overlap > 0.80:
+                dup_count += 1
+                break  # count each sentence as duplicate only once
+
+    return dup_count / len(sentences) if sentences else 0.0
+
+
+def _count_unique_sections(text: str) -> int:
+    """Count distinct section headings in markdown (## or ### level).
+    Also counts # headings but skips the first one (article title)."""
+    text = text or ""
+    # Collect ## and ### headings (always sections)
+    sub_headings = re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)
+    # Collect # headings (skip the very first one — that's the title)
+    h1_headings = re.findall(r"^#\s+(.+)$", text, re.MULTILINE)
+    if h1_headings:
+        h1_headings = h1_headings[1:]  # skip article title
+
+    all_headings = sub_headings + h1_headings
+    # Normalize and deduplicate
+    seen = set()
+    for h in all_headings:
+        norm = re.sub(r"[^a-z0-9\s]", "", h.lower()).strip()
+        if norm and norm not in seen:
+            seen.add(norm)
+    return len(seen)
 
 
 def _sha256_bytes(b: bytes) -> str:
@@ -263,12 +321,14 @@ def get_qc_report(
     settings = get_settings()
     tenant_id = claims.tenant_id
 
-    # plan thresholds
+    # plan thresholds (including new quality checks)
     thresholds = {
-        "word_count_min": 1950,
-        "word_count_max": 2050,
+        "word_count_min": 1900,
+        "word_count_max": 2100,
         "fk_grade_min": 7.0,
-        "fk_grade_max": 9.0,
+        "fk_grade_max": 12.0,            # relaxed: technical blogs naturally use multi-syllable terms
+        "repetition_ratio_max": 0.15,     # max 15% repeated sentences
+        "unique_sections_min": 4,         # at least 4 distinct sections
     }
 
     bucket_name = _pick(settings, "GCS_BUCKET_NAME")
@@ -374,9 +434,14 @@ def get_qc_report(
     metrics = _readability(text)
     wc = int(metrics["word_count"])
     fk = float(metrics["flesch_kincaid_grade"])
+    rep_ratio = float(metrics.get("repetition_ratio", 0.0))
+    unique_sec = int(metrics.get("unique_sections", 0))
 
-    qc_pass = (thresholds["word_count_min"] <= wc <= thresholds["word_count_max"]) and (
-        thresholds["fk_grade_min"] <= fk <= thresholds["fk_grade_max"]
+    qc_pass = (
+        (thresholds["word_count_min"] <= wc <= thresholds["word_count_max"])
+        and (thresholds["fk_grade_min"] <= fk <= thresholds["fk_grade_max"])
+        and (rep_ratio <= thresholds["repetition_ratio_max"])
+        and (unique_sec >= thresholds["unique_sections_min"])
     )
 
     report = {
@@ -388,7 +453,7 @@ def get_qc_report(
         "thresholds": thresholds,
         "qc_pass": qc_pass,
         "metrics": metrics,
-        "notes": "Local QC only (cost=0). ZeroGPT comes later (Day 20).",
+        "notes": "Local QC: wordcount + readability + repetition + section coverage.",
     }
 
     out_bytes = json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8")

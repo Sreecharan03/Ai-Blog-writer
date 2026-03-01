@@ -51,6 +51,21 @@ def _pick(settings: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
+def _compact_source_text(text: str, max_chars: int = 3500) -> str:
+    """
+    Token-cost control:
+    - normalize whitespace
+    - keep full head (no middle cut) to preserve context
+    """
+    t = (text or "").strip()
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    if len(t) <= max_chars:
+        return t
+    # Keep the first max_chars chars — head contains the most structured info
+    return t[:max_chars].rstrip() + "\n..."
+
+
 # ============================================================
 # Auth
 # ============================================================
@@ -493,13 +508,13 @@ def _generate_draft_json_groq(
         "messages": [
             {
                 "role": "system",
-                "content": "Return ONLY valid JSON. No markdown. No extra keys.",
+                "content": "You are a blog writer. Write a complete markdown article with all sections fully developed. Write at least 1900 words. Do NOT stop early.",
             },
             {"role": "user", "content": prompt},
         ],
         "temperature": float(temperature),
         "max_tokens": int(max_output_tokens),
-        "response_format": {"type": "json_object"},
+        # No response_format: json_object — plain text produces 2-3x longer output
     }
 
     last_err: Optional[str] = None
@@ -522,14 +537,16 @@ def _generate_draft_json_groq(
 
         data = resp.json()
         try:
-            content = data["choices"][0]["message"]["content"]
+            content = (data["choices"][0]["message"]["content"] or "").strip()
         except Exception:
             content = ""
 
-        parsed = _safe_json_loads(content) or _safe_json_loads(_extract_json_object(content) or "")
-        if parsed is None:
-            last_err = "Groq returned non-JSON output (parse failed)."
+        if not content:
+            last_err = "Groq returned empty content."
             break
+
+        # Wrap plain markdown into the expected dict structure
+        parsed = {"title": "", "draft_markdown": content, "used_chunks": []}
 
         um = data.get("usage") or {}
         usage = {
@@ -544,10 +561,10 @@ def _generate_draft_json_groq(
 
 def _build_article_prompt(title: str, keywords: List[str], length_target: int, sources: List[Dict[str, Any]]) -> str:
     """
-    Produces a strict prompt: draft must use provided sources.
+    Builds a blog-quality prompt: layman audience, structured outline,
+    anti-repetition, grounded in sources.
     """
     kw = ", ".join(keywords or [])
-    # keep sources compact
     src_lines = []
     for s in sources:
         src_lines.append(
@@ -556,23 +573,45 @@ def _build_article_prompt(title: str, keywords: List[str], length_target: int, s
     src_block = "\n".join(src_lines)
 
     return f"""
-You are an expert technical writer.
+You are a friendly blog writer who explains topics clearly for everyday readers.
 
-Return ONLY valid JSON with this schema:
-{{
-  "title": "string",
-  "draft_markdown": "string (markdown article, headings, bullets, clear structure)",
-  "used_chunks": [{{"doc_id":"uuid","chunk_id":"uuid"}}]
-}}
+Write a complete markdown blog article on the topic below.
+Output ONLY the markdown article — no JSON, no preamble, no explanation.
 
-Write an article based strictly on the SOURCES below.
-- Do NOT invent facts not supported by the sources.
-- If something is missing, say it is not specified in sources.
-- Target length: about {length_target} words (roughly).
-- Topic title: {title}
-- Keywords: {kw}
+TOPIC: {title}
+KEYWORDS: {kw}
+READABILITY: Flesch-Kincaid grade 8-10 (short sentences, common words, no jargon)
 
-SOURCES:
+AUDIENCE: Non-technical readers. Assume zero prior knowledge.
+
+REQUIRED ARTICLE STRUCTURE — write each ## section to its MINIMUM word count.
+You MUST complete every section fully before moving to the next:
+
+  ## Introduction          → 150-180 words  (hook + overview)
+  ## What Is [Topic]       → 250-280 words  (clear definition, real-world analogy)
+  ## Why It Matters        → 250-280 words  (who benefits, what problem it solves)
+  ## How It Works          → 350-400 words  (step-by-step, simple language)
+  ## Real-World Examples   → 300-350 words  (2-3 concrete, relatable stories)
+  ## Common Mistakes       → 200-250 words  (misconceptions, what to avoid)
+  ## Quick FAQ             → 200-230 words  (4-5 Q&A pairs)
+  ## Key Takeaways         → 150-180 words  (bullet summary)
+
+TOTAL: article MUST be 1900-2100 words. Write ALL sections in full. Do NOT stop early.
+
+STRICT RULES:
+- Each section MUST add NEW information not covered in previous sections.
+- NEVER repeat a sentence, phrase, or idea you already wrote.
+- If two sources say the same thing, synthesize into ONE point — do not list both.
+- Use short paragraphs (2-4 sentences each).
+- Use bullet lists for steps, comparisons, and lists.
+- Keep most sentences under 15 words. Mix short and medium sentences for natural flow.
+- Prefer common 1-2 syllable words. When a technical term is needed, define it simply.
+- Use analogies and everyday examples to explain complex ideas.
+- Write in active voice with simple verbs.
+- Do NOT invent facts not supported by the sources below.
+- If information is missing from sources, briefly note it rather than making things up.
+
+SOURCES (base your article on these):
 {src_block}
 """.strip()
 
@@ -590,7 +629,7 @@ class RunRequest(BaseModel):
     draft_provider: str = "groq"  # "groq" or "gemini"
     draft_model: str = GROQ_DEFAULT_MODEL
     temperature: float = 0.35
-    max_output_tokens: int = 2000
+    max_output_tokens: int = 8192
 
     # where to store
     gcs_prefix_articles: str = "articles/"
@@ -732,7 +771,14 @@ def run_article_request(
         if not text:
             continue
 
-        used_sources.append({"doc_id": doc_id, "chunk_id": chunk_id, "distance": dist, "text": text[:4000]})
+        used_sources.append(
+            {
+                "doc_id": doc_id,
+                "chunk_id": chunk_id,
+                "distance": dist,
+                "text": _compact_source_text(text or "", max_chars=3500),
+            }
+        )
 
     if not used_sources:
         # fail safely

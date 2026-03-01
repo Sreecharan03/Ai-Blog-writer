@@ -263,55 +263,37 @@ def _clean_md(md: str) -> str:
     return md
 
 
+# Word replacements that REDUCE syllables WITHOUT changing meaning.
+# Removed entries that made text robotic: "information"->"info", "understand"->"know",
+# "example"->"case", "relationship"->"bond", "important"->"key", "because"->"since"
 _SIMPLE_REPL = {
-    "approximately": "about",
-    "additional": "extra",
-    "assist": "help",
-    "assistance": "help",
-    "beneficial": "helpful",
-    "commence": "start",
-    "conclude": "end",
-    "consequently": "so",
-    "demonstrate": "show",
-    "difficult": "hard",
-    "essential": "key",
-    "facilitate": "help",
-    "frequently": "often",
-    "individuals": "people",
-    "numerous": "many",
-    "objective": "goal",
-    "obtain": "get",
-    "opportunity": "chance",
-    "opportunities": "chances",
-    "important": "key",
-    "importance": "value",
-    "information": "info",
-    "example": "case",
-    "examples": "cases",
-    "because": "since",
-    "understand": "know",
-    "understanding": "knowing",
-    "community": "group",
-    "communities": "groups",
-    "relationship": "bond",
-    "relationships": "bonds",
-    "perform": "do",
-    "potential": "possible",
-    "primarily": "mainly",
-    "prior": "before",
-    "provide": "give",
-    "require": "need",
-    "significant": "large",
-    "significantly": "a lot",
-    "sufficient": "enough",
-    "terminate": "end",
-    "therefore": "so",
-    "utilize": "use",
-    "utilization": "use",
-    "various": "many",
+    # Genuinely pompous -> simple (big syllable drop, same meaning)
+    "approximately": "about",       # 5 syl -> 2
+    "utilize": "use",               # 3 -> 1
+    "utilization": "use",           # 5 -> 1
+    "commence": "start",            # 2 -> 1
+    "terminate": "end",             # 3 -> 1
+    "facilitate": "help",           # 4 -> 1
+    "demonstrate": "show",          # 3 -> 1
+    "consequently": "so",           # 4 -> 1
+    "therefore": "so",              # 3 -> 1
+    "sufficient": "enough",         # 3 -> 2
+    "obtain": "get",                # 2 -> 1
+    "assist": "help",               # 2 -> 1
+    "assistance": "help",           # 3 -> 1
+    "beneficial": "helpful",        # 4 -> 2
+    "frequently": "often",          # 3 -> 2
+    "individuals": "people",        # 5 -> 2
+    "numerous": "many",             # 3 -> 2
+    "primarily": "mainly",          # 4 -> 2
+    "prior": "before",              # 2 -> 2 (clearer)
+    "conclude": "end",              # 2 -> 1
+    "objective": "goal",            # 3 -> 1
+    "various": "many",              # 3 -> 2
 }
 
-_FILLER_RE = re.compile(r"\b(?:very|really|quite|just|simply|basically|actually|generally|mostly)\b", re.IGNORECASE)
+# Only remove true filler words — "generally" and "mostly" carry meaning
+_FILLER_RE = re.compile(r"\b(?:very|really|quite|just|simply|basically|actually)\b", re.IGNORECASE)
 
 
 def _case_preserve(src: str, repl: str) -> str:
@@ -337,12 +319,13 @@ def _simple_replace(text: str) -> str:
 
 
 def _split_chunks(text: str, max_words: int) -> list[str]:
+    """Split text at natural sentence boundaries only (periods, !, ?).
+    Never convert commas or semicolons to periods."""
     s = text.strip()
     if not s:
         return []
-    s2 = re.sub(r"\s*;\s*", ". ", s)
-    s2 = re.sub(r"\s*,\s*", ". ", s2)
-    parts = re.split(r"(?<=[.!?])\s+", s2)
+    # Split only at real sentence endings — do NOT touch commas/semicolons
+    parts = re.split(r"(?<=[.!?])\s+", s)
     chunks: list[str] = []
     for part in parts:
         if not part:
@@ -359,7 +342,9 @@ def _split_chunks(text: str, max_words: int) -> list[str]:
     return chunks
 
 
-def _split_long_sentences(text: str, max_words: int = 12) -> str:
+def _split_long_sentences(text: str, max_words: int = 20) -> str:
+    """Only split sentences that are genuinely too long (>20 words).
+    Preserve natural flow — never break at commas."""
     if not text:
         return text
     lines = text.splitlines()
@@ -416,7 +401,7 @@ def _trim_tail_to_wc(text: str, max_wc: int) -> str:
 
 
 def _post_simplify(text: str, wc_max: Optional[int] = None) -> str:
-    out = _split_long_sentences(_simple_replace(text), max_words=10)
+    out = _split_long_sentences(_simple_replace(text), max_words=20)
     if wc_max is not None and _wc(out) > wc_max:
         out = _drop_fillers(out)
     return _clean_md(out)
@@ -552,7 +537,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
     gcs = _gcs_client(settings)
     articles_prefix = _norm(_pick(settings, "GCS_PREFIX_ARTICLES", default="articles/"))
 
-    thresholds = {"wc_min": 1950, "wc_max": 2050, "fk_min": 7.0, "fk_max": 9.0}
+    thresholds = {"wc_min": 1900, "wc_max": 2100, "fk_min": 7.0, "fk_max": 12.0}
 
     tok = ""
     locked = False
@@ -623,7 +608,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
 
         system = "Return ONLY valid JSON. No markdown. No extra keys."
 
-        max_steps = max(12, int(req.max_passes))
+        max_steps = max(20, int(req.max_passes))
         max_tokens = max(int(req.max_output_tokens), 7000)
         wc_min = thresholds["wc_min"]
         wc_max = thresholds["wc_max"]
@@ -661,6 +646,9 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
             if wc_min <= wc <= wc_max and fk_min <= fk <= fk_max:
                 break
 
+            if stall_count >= 5:
+                break
+
             # 1) EXPAND (priority)
             if wc < wc_min:
                 # add in chunks to avoid model failing to add enough
@@ -685,12 +673,13 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "hard_rules": [
                         "Do NOT edit or rewrite existing text.",
                         "Append NEW sections only at the end.",
+                        "Each new section MUST cover a DIFFERENT aspect not already in the draft.",
+                        "Do NOT repeat any heading, topic, or idea already present.",
                         "Use ## headings + bullet lists + short paragraphs (2-4 lines).",
                         "Use simple words and short sentences.",
                         "Target FK <= 8.8.",
-                        "Short sentences: 10-14 words.",
                         f"Add at least {to_add} words in this call (minimum).",
-                        "Add concrete examples, steps, checklists, and a mini FAQ.",
+                        "Add concrete examples, steps, checklists, or a mini FAQ.",
                         "Keep the topic consistent with the title + keywords.",
                         "Return JSON: { append_markdown: string } only.",
                     ],
@@ -712,8 +701,8 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
 
                 append = _clean_md(str(parsed.get("append_markdown") or parsed.get("content") or parsed.get("text") or ""))
                 changed = False
-                # guard: if model returned too little, retry next loop (don’t overwrite current)
-                if append and _wc(append) >= max(150, int(to_add * 0.6)):
+                # guard: accept any append that adds at least 50 words (lowered from 60% of to_add)
+                if append and _wc(append) >= 50:
                     candidate = _clean_md(f"{current}\n\n{append}")
                     cand_wc, cand_fk, cand_pen = _score(candidate)
                     if cand_pen < curr_pen - 0.01 or (wc_min <= cand_wc <= wc_max + 30):
@@ -755,7 +744,9 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "targets": thresholds,
                     "current_metrics": {"word_count": wc, "fk_grade": fk},
                     "hard_rules": [
+                        "Remove DUPLICATE or NEAR-DUPLICATE content first.",
                         "Do NOT remove main headings or major sections.",
+                        "Preserve the conclusion/summary section.",
                         "Remove repetition, filler, and overly long examples.",
                         f"Cut about {cut} words.",
                         f"Keep total word count between {target_low} and {target_high}.",
@@ -763,7 +754,6 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                         "If you cut too much, add short bullets to reach the minimum.",
                         "While trimming, also simplify long sentences and hard words so FK goes under 9.",
                         "Target FK <= 8.8.",
-                        "Keep short sentences: 10-14 words.",
                         "Return JSON: { draft_markdown: string } only.",
                     ],
                     "draft_markdown_input": current,
@@ -783,14 +773,15 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     usage_total[k] += int(usage.get(k) or 0)
 
                 out = _clean_md(str(parsed.get("draft_markdown") or parsed.get("content") or parsed.get("text") or ""))
-                min_accept = max(1200, wc_min - 300)
                 trim_changed = False
                 if out:
                     cand_wc, cand_fk, cand_pen = _score(out)
-                    if cand_wc < wc and cand_wc >= min_accept:
-                        if cand_pen < curr_pen - 0.01 or cand_wc <= wc_max + 10 or stall_count >= 1:
-                            current = out
-                            trim_changed = True
+                    # Accept ANY trim that actually reduces word count.
+                    # Even if it goes below wc_min, next passes can expand back.
+                    if cand_wc < wc:
+                        current = out
+                        wc = cand_wc
+                        trim_changed = True
                 if trim_changed:
                     stall_count = 0
                     continue
@@ -811,20 +802,19 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "If above max, cut sentences until within range.",
                     "If below min, add short bullets to reach the minimum.",
                     "Target FK <= 8.8.",
-                    "Split long sentences. Use simpler words.",
-                    "Avoid jargon and multi-syllable words.",
+                    "Replace long/complex words with shorter synonyms.",
                     "Use active voice and simple verbs.",
-                    "No sentence longer than 12 words.",
+                    "Keep sentences under 20 words where possible.",
                     "Prefer bullets over long paragraphs.",
-                    "Short sentences: 7-10 words.",
+                    "PRESERVE the original meaning and structure of each sentence.",
+                    "Do NOT rewrite sentences from scratch — only edit for clarity.",
                     "Return JSON: { draft_markdown: string } only.",
                 ]
                 if fk > fk_max + 2.0:
                     hard_rules += [
-                        "Aggressive rewrite to grade 7.",
-                        "Avoid commas and semicolons.",
-                        "Avoid words longer than 8 letters.",
+                        "Simplify vocabulary but keep sentence structure intact.",
                         "Convert dense paragraphs into bullet lists.",
+                        "Use 1-2 syllable words where a simpler synonym exists.",
                     ]
 
                 prompt = {
@@ -855,13 +845,12 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                 if out:
                     candidates.append(out)
 
+                # Only one additional attempt for very high FK (removed 3rd aggressive rewrite)
                 if fk > fk_max + 2.0:
                     hard_rules2 = hard_rules + [
-                        "Rewrite every sentence from scratch.",
+                        "Edit each sentence for simpler vocabulary — do NOT rewrite from scratch.",
                         "You may remove minor details to lower reading grade.",
-                        "Use only common words; avoid words longer than 7 letters.",
-                        "Use 1-2 syllable words where possible.",
-                        "Avoid Sanskrit or technical terms unless essential; replace with simple English.",
+                        "Replace technical terms with plain English equivalents.",
                     ]
                     prompt2 = {
                         "task": "simplify_only",
@@ -889,39 +878,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     if out2:
                         candidates.append(out2)
 
-                if fk > fk_max + 2.0 and stall_count >= 1:
-                    hard_rules3 = hard_rules + [
-                        "Rewrite to very simple English.",
-                        "Use only short words and simple verbs.",
-                        "Keep each sentence under 10 words.",
-                        "Turn most paragraphs into bullet lists.",
-                        "Remove any advanced terms.",
-                    ]
-                    prompt3 = {
-                        "task": "simplify_only",
-                        "title": title,
-                        "keywords": keywords,
-                        "targets": thresholds,
-                        "current_metrics": {"word_count": wc, "fk_grade": fk},
-                        "hard_rules": hard_rules3,
-                        "draft_markdown_input": current,
-                    }
-                    parsed3, usage3 = _groq_json(
-                        str(groq_key),
-                        model=req.model,
-                        system=system,
-                        prompt=json.dumps(prompt3, ensure_ascii=False),
-                        temp=float(req.temperature),
-                        max_tokens=max_tokens,
-                        timeout_s=180,
-                        retries=3,
-                    )
-                    for k in usage_total:
-                        usage_total[k] += int(usage3.get(k) or 0)
-
-                    out3 = _clean_md(str(parsed3.get("draft_markdown") or parsed3.get("content") or parsed3.get("text") or ""))
-                    if out3:
-                        candidates.append(out3)
+                # 3rd aggressive fallback REMOVED — it destroyed content quality
 
                 best_text = current
                 best_pen = curr_pen

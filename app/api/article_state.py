@@ -222,6 +222,7 @@ class RetryRequest(BaseModel):
     reason: str = "manual_retry"
     force_unlock: bool = False
     priority: Optional[int] = None  # allow bump priority on retry
+    skip_if_qc_pass: bool = False   # if True, don't overwrite a draft that already passes QC
 
 
 # ============================================================
@@ -326,6 +327,13 @@ def retry_request(
         if status in ("completed",):
             conn.commit()
             raise HTTPException(status_code=409, detail="Request already completed. Create a new request if you want a new article.")
+
+        # Workflow guard: skip retry if current draft already passes QC
+        if payload.skip_if_qc_pass:
+            qc_summary = req.get("qc_summary")
+            if isinstance(qc_summary, dict) and qc_summary.get("qc_pass"):
+                conn.commit()
+                return StateResponse(status="ok", request=req)
 
         # Transition to queued (attempt_count is not incremented here; /run increments)
         new_priority = payload.priority if payload.priority is not None else req.get("priority")

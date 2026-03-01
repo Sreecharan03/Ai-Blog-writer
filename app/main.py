@@ -60,7 +60,6 @@ def create_app() -> FastAPI:
     app.include_router(hybrid_search_router)
     app.include_router(article_requests_router)
     app.include_router(article_run_router)
-    app.include_router(article_run_router)
     app.include_router(article_output_router)
     app.include_router(article_state_router)
     app.include_router(article_qc_router)

@@ -1,285 +1,391 @@
-# Sighnal Backend — Document Intelligence API
+# Sighnal — AI Content Generator Backend
 
-**FastAPI** · **Supabase Postgres** · **Google Cloud Storage** · **Gemini AI**
+**FastAPI** · **Supabase Postgres** · **Google Cloud Storage** · **Gemini AI** · **Groq (Kimi K2 + Llama 3.3)**
 
-Multi-tenant pipeline: ingest documents → clean → chunk → embed → search.
+Multi-tenant backend that ingests documents/URLs → preprocesses into a knowledge base → generates ~2000-word SEO blog articles → performs QC (readability + AI detection) → stores everything in GCS.
 
 ---
 
-## System Flow (End-to-End)
+## What Is Sighnal?
+
+Sighnal is a backend-first, multi-tenant AI content system built for the full pipeline:
+
+1. **Ingest** — upload PDFs, DOCX, or crawl URLs into a tenant Knowledge Base
+2. **Preprocess** — clean, chunk, summarize, embed (pgvector)
+3. **Retrieve** — hybrid vector + keyword + entity search
+4. **Generate** — ~2000-word blog articles via Groq LLM (Kimi K2)
+5. **QC** — word count, Flesch-Kincaid readability, repetition ratio, section count
+6. **Detect** — ZeroGPT AI detection scoring
+7. **Revise** — minimal QC-fix loop (expand/trim/simplify) to hit thresholds
+
+All artifacts stored in **Google Cloud Storage (GCS)**. Finance and audit logs in **Supabase**.
+
+---
+
+## Architecture
 
 ```
-[Login] → [Create Tenant] → [Create KB] → [Ingest File/URL]
-             ↓                                      ↓
-      [Check Job Status] ←──────────────── [job_events log]
-             ↓
-       [Preprocess] → [Chunk] → [Embed] → [Search / Hybrid-Search]
-                          ↘ [Summarize]
+[Client UI] → [FastAPI Backend]
+                     ↓
+         ┌───────────────────────┐
+         │  GCS Content Lake     │  raw/ · processed/ · articles/
+         └───────────────────────┘
+         ┌───────────────────────┐
+         │  Supabase Postgres    │  tenants · KBs · chunks · embeddings
+         │  + pgvector           │  job_events · usage_events
+         └───────────────────────┘
+         ┌───────────────────────┐
+         │  Groq API             │  Kimi K2 (draft) · Llama 3.3 (QC-fix)
+         │  Gemini API           │  embeddings · summarization
+         │  ZeroGPT API          │  AI detection scoring
+         └───────────────────────┘
 ```
 
 ---
 
 ## Quick Start
 
-```bash
-BASE="http://localhost:8000"
-# Run server
-uvicorn app.main:app --reload --port 8000
+```powershell
+# Start the server
+cd "d:\Hare Krishna_ai_blog"
+.venv\Scripts\uvicorn app.main:app --reload --port 8000
 ```
 
 ---
 
-## STAGE 1 — Health & Readiness
+## PowerShell Testing Commands (Full Pipeline)
 
-### 1. Health Check
-```bash
-curl $BASE/api/v1/health
-# OUTPUT: {"status":"ok","service":"sighnal-backend","env":"local"}
-```
+### Step 1 — Health Checks
 
-### 2. DB Health
-```bash
-curl $BASE/api/v1/db/health
-# OUTPUT: {"status":"ok","db":"supabase-postgres","select_1":1}
-```
+```powershell
+$BASE = "http://localhost:8000"
 
-### 3. GCS Readiness (confirms bucket + .keep objects)
-```bash
-curl $BASE/api/v1/ready
-# OUTPUT: {"status":"ready","checks":{"gcs":{"ok":true,"detail":{...}}}}
+# Liveness
+Invoke-RestMethod -Uri "$BASE/api/v1/health"
+
+# DB health
+Invoke-RestMethod -Uri "$BASE/api/v1/db/health"
+
+# GCS readiness
+Invoke-RestMethod -Uri "$BASE/api/v1/ready"
 ```
 
 ---
 
-## STAGE 2 — Auth (JWT)
+### Step 2 — Auth (JWT Login)
 
-### 4. Login — Get JWT Token
-**Input:** `tenant_id` (UUID), optional `user_id`, `role`
-```bash
-curl -X POST $BASE/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id":"<TENANT_UUID>","role":"tenant_admin"}'
-# OUTPUT: {"access_token":"eyJ...","token_type":"bearer","expires_in":43200,
-#          "tenant_id":"<UUID>","user_id":"<UUID>","role":"tenant_admin"}
-```
-> **Save** `access_token` as `TOKEN` for all subsequent calls.
+> **Note:** Dev login uses `tenant_id` directly (no email/password). Query DB for your tenant_id first.
 
-### 5. Verify Token (/me)
-```bash
-curl $BASE/api/v1/me -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","user":{...},"tenant":{...},"claims":{...}}
-```
+```powershell
+# Login with tenant_id
+$body = @{
+    tenant_id = "5ebc3c3a-5e0e-42a5-a350-76f1b792ac15"
+    role      = "tenant_admin"
+} | ConvertTo-Json
 
-### 6. Admin Role Check
-```bash
-curl $BASE/api/v1/admin/ping -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","msg":"admin access granted","tenant_id":"<UUID>"}
+$loginResp = Invoke-RestMethod -Uri "$BASE/api/v1/auth/login" `
+    -Method POST -Body $body -ContentType "application/json"
+
+$TOKEN = $loginResp.access_token
+Write-Host "TOKEN: $TOKEN"
+
+# Verify token
+Invoke-RestMethod -Uri "$BASE/api/v1/me" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 ```
 
 ---
 
-## STAGE 3 — Tenant & DB Setup
+### Step 3 — Create Tenant (first time only)
 
-### 7. Create Tenant (required before KB)
-```bash
-curl -X POST $BASE/api/v1/db/tenants \
-  -H "Content-Type: application/json" \
-  -d '{"name":"MyCompany"}'
-# OUTPUT: {"status":"ok","tenant":{"tenant_id":"<UUID>","name":"MyCompany","created_at":"..."}}
-```
-> **Save** `tenant_id` and use it in `auth/login` to get your TOKEN.
-
----
-
-## STAGE 4 — Knowledge Base (KB) CRUD
-
-### 8. Create KB
-**Input:** `name`, optional `description`, `scope`
-```bash
-curl -X POST $BASE/api/v1/kb \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Product Docs","description":"Our product knowledge base","scope":"tenant_private"}'
-# OUTPUT: {"status":"ok","kb":{"kb_id":"<UUID>","tenant_id":"<UUID>","name":"Product Docs",...}}
-```
-> **Save** `kb_id` as `KB_ID`.
-
-### 9. List KBs
-```bash
-curl "$BASE/api/v1/kb?limit=20&offset=0" -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","tenant_id":"<UUID>","count":1,"kbs":[...]}
-```
-
-### 10. Get KB by ID
-```bash
-curl $BASE/api/v1/kb/$KB_ID -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","kb":{...}}
-```
-
-### 11. Delete KB
-```bash
-curl -X DELETE $BASE/api/v1/kb/$KB_ID -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","deleted":true,"kb_id":"<UUID>"}
+```powershell
+$body = @{ name = "MyCompany" } | ConvertTo-Json
+$t = Invoke-RestMethod -Uri "$BASE/api/v1/db/tenants" `
+    -Method POST -Body $body -ContentType "application/json"
+$TENANT_ID = $t.tenant.tenant_id
+Write-Host "TENANT_ID: $TENANT_ID"
 ```
 
 ---
 
-## STAGE 5 — Document Ingestion
+### Step 4 — Knowledge Base
 
-### 12. Ingest File (PDF / DOCX / TXT / MD)
-**Input:** `kb_id` (path), multipart `file`
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/ingest/file \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@/path/to/document.pdf"
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","doc_id":"<UUID>",
-#          "ingestion_job_id":"<UUID>","fingerprint":"sha256...",
-#          "gcs_raw_uri":"gs://...","gcs_extracted_uri":"gs://...",
-#          "extraction_ok":true,"extraction_method":"pdf:pdfminer","extracted_chars":12345}
-```
-> **Save** `doc_id` as `DOC_ID` and `ingestion_job_id` as `JOB_ID`.
+```powershell
+# Create KB
+$body = @{
+    name        = "Product Docs"
+    description = "My knowledge base"
+    scope       = "tenant_private"
+} | ConvertTo-Json
+$kb = Invoke-RestMethod -Uri "$BASE/api/v1/kb" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$KB_ID = $kb.kb.kb_id
+Write-Host "KB_ID: $KB_ID"
 
-### 13. Ingest URL (Web Crawler)
-**Input:** `kb_id` (path), JSON body with `url`, crawl config
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/ingest/url \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://docs.example.com/","max_depth":3,"max_pages":50,"wait":false}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","ingestion_job_id":"<UUID>",
-#          "seed_url":"https://docs.example.com/","queued_mode":"background","config":{...}}
+# List KBs
+Invoke-RestMethod -Uri "$BASE/api/v1/kb?limit=20" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 ```
 
 ---
 
-## STAGE 6 — Job Status & Events
+### Step 5 — Ingest Document
 
-### 14. Check Ingest Job Status
-```bash
-curl "$BASE/api/v1/ingest/jobs/$JOB_ID?include_events=true" \
-  -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","job_id":"<UUID>","state":"done","progress":{"current":5,"total":5,"pct":100},
-#          "artifacts":{"doc_id":"<UUID>","gcs_raw_uri":"gs://..."},"recent_events":[...]}
-```
+```powershell
+# Ingest a PDF
+$ingest = Invoke-RestMethod -Uri "$BASE/api/v1/kb/$KB_ID/ingest/file" `
+    -Method POST `
+    -Headers @{Authorization = "Bearer $TOKEN"} `
+    -Form @{ file = Get-Item "C:\path\to\document.pdf" }
 
-### 15. List KB Documents
-```bash
-curl "$BASE/api/v1/kb/$KB_ID/docs?limit=20" -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","count":3,"docs":[...]}
-```
+$DOC_ID = $ingest.doc_id
+$JOB_ID = $ingest.ingestion_job_id
+Write-Host "DOC_ID: $DOC_ID"
 
-### 16. Get Specific Document
-```bash
-curl $BASE/api/v1/kb/$KB_ID/docs/$DOC_ID -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","doc":{all document metadata}}
+# Check job status
+Invoke-RestMethod -Uri "$BASE/api/v1/ingest/jobs/$JOB_ID`?include_events=true" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 ```
 
 ---
 
-## STAGE 7 — Preprocessing (Text Cleaning)
+### Step 6 — Preprocess → Chunk → Embed
 
-### 17. Preprocess Document (clean extracted text)
-**Input:** `kb_id`, `doc_id` (path), optional JSON body
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/preprocess/$DOC_ID \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"remove_boilerplate":true,"standardize_bullets":true,"standardize_headings":true}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","doc_id":"<UUID>","preprocess_job_id":"<UUID>",
-#          "preprocessing_version":"v1","clean_fingerprint":"sha256...",
-#          "gcs_clean_uri":"gs://...","cleaned_chars":9800,"method":"clean:v1","stats":{...}}
-```
-> **Save** `preprocess_job_id` as `PREP_JOB_ID`.
+```powershell
+# Preprocess
+$body = @{
+    remove_boilerplate   = $true
+    standardize_bullets  = $true
+    standardize_headings = $true
+} | ConvertTo-Json
+$prep = Invoke-RestMethod -Uri "$BASE/api/v1/kb/$KB_ID/preprocess/$DOC_ID" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$PREP_JOB_ID = $prep.preprocess_job_id
 
-### 18. Check Preprocess Job
-```bash
-curl "$BASE/api/v1/preprocess/jobs/$PREP_JOB_ID?include_events=true" \
-  -H "Authorization: Bearer $TOKEN"
-# OUTPUT: {"status":"ok","state":"done","progress":{"current":5,"total":5,"pct":100},"artifacts":{...}}
-```
+# Check preprocess job
+Invoke-RestMethod -Uri "$BASE/api/v1/preprocess/jobs/$PREP_JOB_ID`?include_events=true" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 
----
+# Chunk
+$body = @{
+    chunk_size_chars = 2000
+    overlap_chars    = 200
+    max_chunks       = 5000
+    prefer_clean     = $true
+} | ConvertTo-Json
+$chunk = Invoke-RestMethod -Uri "$BASE/api/v1/kb/$KB_ID/chunk/$DOC_ID" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 
-## STAGE 8 — Chunking
-
-### 19. Chunk Document
-**Input:** `kb_id`, `doc_id` (path), JSON body with chunk params
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/chunk/$DOC_ID \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"chunk_size_chars":2000,"overlap_chars":200,"max_chunks":5000,"prefer_clean":true}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","doc_id":"<UUID>","chunk_job_id":"<UUID>",
-#          "input_kind":"clean_v1","chunk_count":47,
-#          "gcs_chunks_uri":"gs://.../chunks_v1/<hash>.jsonl",
-#          "gcs_manifest_uri":"gs://.../chunks_v1/<hash>.manifest.json","stats":{...}}
-```
-> **Save** `gcs_chunks_uri` as `CHUNKS_URI`.
-
----
-
-## STAGE 9 — Summarize (Gemini/Groq)
-
-### 20. Summarize Document (parallel to embed)
-**Input:** `kb_id`, `doc_id` (path), optional JSON body
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/summarize/$DOC_ID \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"primary_model":"gemini-2.5-flash","fallback_model":"gemini-2.5-pro","max_chunks":200}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","doc_id":"<UUID>","summarize_job_id":"<UUID>",
-#          "chunk_count":47,"gcs_summary_uri":"gs://...","summary_fingerprint":"sha256...",
-#          "usage":{"prompt_tokens":4500,"output_tokens":800,"total_tokens":5300},"meta":{...}}
+# Embed
+$body = @{
+    embedding_model       = "models/gemini-embedding-001"
+    output_dimensionality = 1536
+    batch_size            = 32
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "$BASE/api/v1/kb/$KB_ID/embed/$DOC_ID" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 ```
 
 ---
 
-## STAGE 10 — Embeddings
+### Step 7 — Search (Hybrid)
 
-### 21. Embed Chunks (Gemini text-embedding-001, dim=1536)
-**Input:** `kb_id`, `doc_id` (path), optional `gcs_chunks_uri`
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/embed/$DOC_ID \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"embedding_model":"models/gemini-embedding-001","output_dimensionality":1536,"batch_size":32}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","doc_id":"<UUID>","embed_job_id":"<UUID>",
-#          "chunk_count":47,"embedded_count":47,"embedding_model":"models/gemini-embedding-001",
-#          "output_dimensionality":1536,"meta":{"cache_hit":false}}
+```powershell
+$body = @{
+    query          = "What are the main features?"
+    doc_id         = $DOC_ID
+    top_k          = 5
+    alpha_vector   = 0.75
+    beta_keyword   = 0.25
+    diversify      = $true
+    use_cache      = $true
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "$BASE/api/v1/kb/$KB_ID/hybrid-search" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
 ```
 
 ---
 
-## STAGE 11 — Search
+### Step 8 — Article Pipeline (Days 16–21)
 
-### 22. Vector Search (cosine similarity via pgvector)
-**Input:** `kb_id` (path), JSON body with `query`
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/search \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What are the main features?","doc_id":"<DOC_ID>","top_k":5}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","query":"...","top_k":5,
-#          "results":[{"chunk_id":"<UUID>","score":0.92,"distance":0.08,"text":"..."},...]}
-```
+```powershell
+# 1. Create article request
+$body = @{
+    kb_id    = $KB_ID
+    title    = "Understanding Retry Mechanisms"
+    keywords = @("retry", "resilience", "fault tolerance")
+} | ConvertTo-Json
+$reqs = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests" `
+    -Method POST -Body $body -ContentType "application/json" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$REQUEST_ID = $reqs.request.request_id
+Write-Host "REQUEST_ID: $REQUEST_ID"
 
-### 23. Hybrid Search (Vector + Keyword + Entity + Diversification)
-**Input:** `kb_id` (path), JSON body with `query`, weights, diversify options
-```bash
-curl -X POST $BASE/api/v1/kb/$KB_ID/hybrid-search \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What are the main features?","doc_id":"<DOC_ID>","top_k":5,
-       "alpha_vector":0.75,"beta_keyword":0.25,"diversify":true,"use_cache":true}'
-# OUTPUT: {"status":"ok","kb_id":"<UUID>","results":[
-#          {"chunk_id":"<UUID>","score":0.89,"vector_score":0.92,
-#           "keyword_score":0.67,"entity_boost":0.03,"text":"..."},...],
-#          "meta":{"weights":{"alpha_vector":0.75,"beta_keyword":0.25},...}}
+# 2. List requests (to find existing IDs)
+$list = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$REQUEST_ID = $list.requests[0].request_id
+
+# 3. Run draft generation (~936 words, 8 sections, FK ~3.8)
+$run = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests/$REQUEST_ID/run" `
+    -Method POST `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$run | ConvertTo-Json -Depth 5
+
+# 4. Check QC (word count + FK + repetition + sections)
+$qc = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests/$REQUEST_ID/qc" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$qc | ConvertTo-Json -Depth 5
+
+# 5. Run QC-fix if needed (expands to 1900-2100 words, ~8000 tokens)
+$fix = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests/$REQUEST_ID/qc-fix" `
+    -Method POST `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$fix | ConvertTo-Json -Depth 5
+
+# 6. ZeroGPT AI detection
+$zgpt = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests/$REQUEST_ID/zerogpt" `
+    -Method POST `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$zgpt | ConvertTo-Json -Depth 5
+
+# 7. Get final article (signed GCS URL)
+$out = Invoke-RestMethod -Uri "$BASE/api/v1/articles/requests/$REQUEST_ID/output" `
+    -Headers @{Authorization = "Bearer $TOKEN"}
+$out | ConvertTo-Json -Depth 5
+
+# 8. Save final blog markdown to file
+$gcsUrl = $out.signed_url   # or adjust to actual field name
+$blog = Invoke-WebRequest -Uri $gcsUrl
+$blog.Content | Out-File -FilePath "final_blog.md" -Encoding UTF8
+Write-Host "Blog saved to final_blog.md"
 ```
 
 ---
 
-## Database Tables Created
+## Changes Made (Sessions 2026-02-27 to 2026-03-01)
+
+### Problem That Was Fixed
+
+The QC-fix loop was running 28+ times and still producing robotic, staccato text like *"A retry helps systems. It fixes failures."* — passing ZeroGPT (0% AI) but completely unreadable as a blog.
+
+### Root Causes Found
+
+| # | Root Cause | Impact |
+|---|---|---|
+| 1 | `response_format: json_object` in Groq API | Capped all models at ~900-1100 output tokens regardless of max_tokens |
+| 2 | `_post_simplify()` converting commas to periods | "retry, fix, recover" → "retry. fix. recover." — staccato text |
+| 3 | Word replacement dict: "information"→"info", "understand"→"know" | Bizarre robotic English |
+| 4 | Aggressive simplify rules: "no sentence longer than 12 words" | Destroyed article structure |
+| 5 | Draft prompt: "expert technical writer" + strict JSON schema | Wrong audience, model parroted sources |
+| 6 | No repetition/section checks in QC | 28-iteration loops passing broken content |
+| 7 | Duplicate router in `main.py` | Double-registered article routes |
+
+### Files Modified
+
+#### `app/api/article_run.py`
+- **Removed** `response_format: json_object` from Groq API body (root cause #1 — JSON mode caps output)
+- **Changed** system prompt to: *"Write complete markdown article, at least 1900 words, do NOT stop early"*
+- **Changed** prompt from JSON schema to plain markdown with per-section word targets:
+  ```
+  ## Introduction (150-180 words)
+  ## What Is [Topic] (250-280 words)
+  ## Why It Matters (250-280 words)
+  ## How It Works (350-400 words)
+  ## Real-World Examples (300-350 words)
+  ## Common Mistakes (200-250 words)
+  ## Quick FAQ (200-230 words)
+  ## Key Takeaways (150-180 words)
+  TOTAL: 1900-2100 words
+  ```
+- **Changed** parsing to wrap plain text response into `{"title": ..., "draft_markdown": content}`
+- **Increased** `max_output_tokens` default: 4096 → 8192
+- **Changed** role to: *"You are a friendly blog writer who explains topics clearly for everyday readers"*
+
+#### `app/api/article_revise.py`
+- **Removed** comma-to-period conversion in `_split_long_sentences()` (root cause #2)
+- **Reduced** `_SIMPLE_REPL` word replacement dict from 46 → 8 safe entries only
+- **Removed** "generally", "mostly" from filler list (these carry meaning)
+- **Removed** "Rewrite every sentence from scratch" rule from aggressive simplify
+- **Removed** "No sentence longer than 12 words" / "Avoid words longer than 8 letters" rules
+- **Removed** 3rd aggressive fallback rewrite (was making 3 parallel Groq calls)
+- **Changed** `wc_max`: 2050 → 2100
+- **Added** stall break: `if stall_count >= 5: break` to prevent infinite loops
+
+#### `app/api/article_qc.py`
+- **Added** `repetition_ratio` check — flags if >15% of sentences are near-duplicates
+- **Added** `unique_sections` check — counts `#`/`##`/`###` headings, requires ≥4
+- **Changed** QC pass/fail to include: `repetition_ratio < 0.15` AND `unique_sections >= 4`
+- **Changed** `wc_max`: 2050 → 2100
+
+#### `app/api/article_state.py`
+- **Added** `skip_if_qc_pass` guard — if current draft already passes QC, skip heavy simplify
+
+#### `app/main.py`
+- **Removed** duplicate `app.include_router(article_run_router)` (was registered twice)
+
+### Results After Fixes
+
+| Metric | Before | After |
+|---|---|---|
+| QC-fix iterations | 28 (never converged) | 3-5 (converges cleanly) |
+| QC-fix token cost | ~66,219 tokens | ~8,129 tokens (8x cheaper) |
+| Final word count | 650-780 (never hitting 1900) | 2016 words ✅ |
+| FK grade | N/A (broken) | 8.88 ✅ |
+| Draft structure | Robotic / staccato | 8 sections, 0% repetition |
+| Draft model | Llama 3.3 70B | Kimi K2 (moonshotai/kimi-k2-instruct-0905) |
+
+### Model Config (Current Best)
+
+| Step | Model | Provider | Cost |
+|---|---|---|---|
+| Draft generation | `moonshotai/kimi-k2-instruct-0905` | Groq | $1.00/M in · $3.00/M out |
+| QC-fix rewrites | `llama-3.3-70b-versatile` | Groq | $0.59/M in · $0.79/M out |
+| Embeddings | `gemini-embedding-001` | Gemini | standard pricing |
+| Summarization | `gemini-2.5-flash` | Gemini | standard pricing |
+
+---
+
+## Progress Tracker
+
+| Day | Deliverable | Status |
+|---|---|---|
+| Day 1 | Repo setup · GCS buckets · `/health` endpoint | ✅ Done |
+| Day 2 | Cloud SQL/Supabase + pgvector · DB schemas · connectivity | ✅ Done |
+| Day 3 | Supabase finance/logs tables · usage_events · job_events | ✅ Done |
+| Day 4 | FastAPI JWT auth · tenant middleware · role checks · `/me` | ✅ Done |
+| Day 5 | Tenant creation · cost calculator · pricebook structure | ✅ Done |
+| Day 6 | KB CRUD (create/list/get/delete) · budget structure | ✅ Done |
+| Day 7 | File ingestion → GCS raw → fingerprint → DB document row | ✅ Done |
+| Day 8 | URL ingestion · BFS crawler · robots.txt · rate-limit | ✅ Done |
+| Day 9 | Cache registry · global vs tenant-private scope · cache-hit reuse | ✅ Done |
+| Day 10 | Ingestion job tracking · job_events · SSE status streaming | ✅ Done |
+| Day 11 | Preprocessing · extraction + cleaning · clean_text in GCS | ✅ Done |
+| Day 12 | Dynamic chunker · recursive + sliding overlap · chunk metadata | ✅ Done |
+| Day 13 | Gemini summaries + entities · usage token cost logging | ✅ Done |
+| Day 14 | Gemini embeddings · pgvector upsert · top_k retrieval | ✅ Done |
+| Day 15 | Hybrid retrieval · vector + keyword + entity boost · retrieval cache | ✅ Done |
+| Day 16 | Article request queue · locking · FastAPI create/list/get endpoints | ✅ Done |
+| Day 17 | Draft generation · Kimi K2 via Groq · plain text mode · GCS storage | ✅ Done |
+| Day 18 | Retry loop · attempt management · job state transitions | ✅ Done |
+| Day 19 | Local QC · word count + FK + repetition + section checks | ✅ Done |
+| Day 20 | ZeroGPT integration · score + span highlights · usage logged | ✅ Done |
+| Day 21 | Minimal revision loop · QC-fix (expand/trim/simplify) · 8x cheaper | ✅ Done |
+| Day 22 | Stale lock sweeper + recovery · kill worker test · job recovery after TTL | ⏳ Pending |
+| Day 23 | Deployment hardening · services · restart policies · structured logs | ⏳ Pending |
+| Day 24 | Load testing · DB index tuning · retrieval performance · cache validation | ⏳ Pending |
+| Day 25 | Final deployment + runbook · end-to-end demo · sign-off checklist | ⏳ Pending |
+
+**21 of 25 days complete.**
+
+---
+
+## Database Tables
 
 | Table | Purpose |
 |---|---|
@@ -292,44 +398,81 @@ curl -X POST $BASE/api/v1/kb/$KB_ID/hybrid-search \
 | `public.chunks` | Chunk metadata + GCS refs |
 | `public.chunk_embeddings` | pgvector embeddings (dim=1536) |
 | `public.url_pages` | Web crawl page hierarchy |
-| `public.retrieval_cache` | Hybrid search cache (TTL) |
+| `public.retrieval_cache` | Hybrid search cache (TTL=24h) |
 | `public.cache_registry` | File dedup cache across docs |
+| `public.article_requests` | Article generation queue |
 
 ---
 
-## Progress Status (Completed Stages)
+## GCS Folder Layout
 
-| Stage | Description | Status |
-|---|---|---|
-| Day 1 | Health + GCS readiness checks | ✅ Done |
-| Day 2 | DB health (Supabase Postgres) | ✅ Done |
-| Day 3 | JWT Auth (HS256, login/logout/me) | ✅ Done |
-| Day 5 | Tenant creation in DB | ✅ Done |
-| Day 6 | KB CRUD (create/list/get/delete) | ✅ Done |
-| Day 7 | File ingestion + SHA256 cache registry | ✅ Done |
-| Day 8 | URL crawl ingestion (BFS, robots, rate-limit) | ✅ Done |
-| Day 10 | Ingest job status tracker (from job_events) | ✅ Done |
-| Day 11 | Preprocessing: text cleaning + normalization | ✅ Done |
-| Day 12 | Dynamic chunking (heading-aware + overlap) | ✅ Done |
-| Day 13 | Summarization (Gemini/Groq, per-chunk + doc TOC) | ✅ Done |
-| Day 14 | Gemini embeddings + pgvector search | ✅ Done |
-| Day 15 | Hybrid search (vector + keyword + entity + cache) | ✅ Done |
-
-**Next:** RAG answer generation, article writer, multi-doc search.
+```
+gs://ai_blog_02/
+  raw/<fingerprint>/original.<ext>
+  url_snapshots/<url_hash>/<fetched_at>.json
+  processed/<fingerprint>/clean_text.json
+  processed/<fingerprint>/chunks.json
+  processed/<fingerprint>/summaries.json
+  articles/<tenant_id>/<request_id>/draft_v1.md
+  articles/<tenant_id>/<request_id>/final.md
+  articles/<tenant_id>/<request_id>/qc_report.json
+```
 
 ---
 
-## Required .env Variables
+## Required `.env` Variables
 
 ```env
-GCP_PROJECT_ID=your-gcp-project
-GCS_BUCKET_NAME=your-bucket
-DB_HOST=your-supabase-host
+# App
+APP_NAME=Sighnal
+API_HOST=127.0.0.1
+API_PORT=8000
+
+# Auth
+JWT_SECRET_KEY=your-strong-random-secret-64chars
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=720
+
+# GCS
+GCP_PROJECT_ID=your-gcp-project-id
+GCS_BUCKET_NAME=your-bucket-name
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+# Supabase Postgres
+DB_HOST=your-supabase-pooler-host
+DB_PORT=6543
 DB_NAME=postgres
-DB_USER=postgres
-DB_PASSWORD=your-password
+DB_USER=postgres.your-project-ref
+DB_PASSWORD=your-db-password
 DB_SSLMODE=require
-JWT_SECRET_KEY=your-strong-secret-32chars+
+
+# Gemini
 GEMINI_API_KEY=your-gemini-key
-GROQ_API_KEY=your-groq-key   # optional fallback LLM
+GEMINI_MODEL_DRAFT=gemini-2.5-flash
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+
+# Groq (LLM for article generation + QC-fix)
+GROQ_API_KEY=your-groq-key
+GROQ_MODEL=moonshotai/kimi-k2-instruct-0905
+
+# ZeroGPT
+ZEROGPT_API_KEY=your-zerogpt-key
+ZEROGPT_BASE_URL=https://api.zerogpt.com
+
+# QC Thresholds
+BLOG_WORDCOUNT_MIN=1900
+BLOG_WORDCOUNT_MAX=2100
+READABILITY_MIN_GRADE=7.0
+READABILITY_MAX_GRADE=12.0
 ```
+
+---
+
+## QC Thresholds (Current)
+
+| Check | Min | Max | Method |
+|---|---|---|---|
+| Word count | 1900 | 2100 | Simple split |
+| FK grade | 7.0 | 12.0 | textstat |
+| Repetition ratio | — | < 15% | Sentence Jaccard |
+| Unique sections | ≥ 4 | — | `#`/`##`/`###` heading count |

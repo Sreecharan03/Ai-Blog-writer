@@ -221,6 +221,15 @@ def _gcs_download_bytes(client: storage.Client, gs_uri: str) -> bytes:
     return blob.download_as_bytes()
 
 
+def _gcs_download_json(client: storage.Client, gs_uri: str) -> Dict[str, Any]:
+    b = _gcs_download_bytes(client, gs_uri)
+    try:
+        o = json.loads(b.decode("utf-8", errors="replace"))
+        return o if isinstance(o, dict) else {}
+    except Exception:
+        return {}
+
+
 def _gcs_upload_bytes_create_only(
     client: storage.Client,
     bucket_name: str,
@@ -398,6 +407,7 @@ def run_zerogpt(
                 """
                 SELECT request_id, tenant_id, kb_id, status,
                        attempt_count, gcs_draft_uri, draft_fingerprint,
+                       gcs_qc_uri, qc_fingerprint,
                        gcs_zerogpt_uri, zerogpt_fingerprint, zerogpt_score, zerogpt_meta
                 FROM public.article_requests
                 WHERE tenant_id=%s::uuid AND request_id=%s::uuid
@@ -420,11 +430,26 @@ def run_zerogpt(
         gcs_draft_uri = str(gcs_draft_uri)
         draft_fp = str(draft_fp)
 
+        gcs_qc_uri = row.get("gcs_qc_uri")
+        qc_fp = row.get("qc_fingerprint")
+        if not gcs_qc_uri or not qc_fp:
+            raise HTTPException(status_code=409, detail="QC not found yet. Run /qc first (Day 19).")
+
+        # Read QC JSON from GCS for truth (avoid cached assumptions)
+        try:
+            qc_obj = _gcs_download_json(gcs, str(gcs_qc_uri))
+            qc_pass = bool(qc_obj.get("qc_pass")) if isinstance(qc_obj, dict) else False
+        except Exception:
+            raise HTTPException(status_code=502, detail="Failed to read QC artifact from GCS.")
+
+        if not qc_pass:
+            raise HTTPException(status_code=409, detail="QC failed. Fix draft with /qc-fix before ZeroGPT.")
+
         # Cache hit is valid only if it matches current draft_fp (important!)
         if (not force) and row.get("gcs_zerogpt_uri") and row.get("zerogpt_fingerprint"):
             meta = row.get("zerogpt_meta") or {}
             cached_for_fp = meta.get("draft_fingerprint") if isinstance(meta, dict) else None
-            if (not cached_for_fp) or (str(cached_for_fp) == draft_fp):
+            if str(cached_for_fp or "") == draft_fp:
                 out_uri = str(row["gcs_zerogpt_uri"])
                 out_fp = str(row["zerogpt_fingerprint"])
                 out_score = row.get("zerogpt_score")
@@ -477,6 +502,18 @@ def run_zerogpt(
     # ---- Call ZeroGPT (api.zerogpt.com) ----
     resp = _call_zerogpt_zerogpt_com(base_url=base_url, api_key=api_key, text=draft_md, timeout_s=60)
     score, meta = _extract_score(resp)
+    try:
+        txt_words = int(meta.get("textWords") or 0) if isinstance(meta, dict) else 0
+        ai_words = int(meta.get("aiWords") or 0) if isinstance(meta, dict) else 0
+    except Exception:
+        txt_words, ai_words = 0, 0
+    confidence = "normal"
+    if score is not None and score <= 1.0 and ai_words == 0 and txt_words >= 1500:
+        confidence = "low"
+    if isinstance(meta, dict):
+        meta["confidence"] = confidence
+    else:
+        meta = {"confidence": confidence}
 
     # ---- Build + store artifact in GCS ----
     artifact = {
