@@ -106,6 +106,13 @@ def _db_conn(settings: Any):
     )
 
 
+def _ensure_zerogpt_columns(conn) -> None:
+    """Ensure zerogpt + zerogpt-fix columns exist before we SELECT them."""
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_score double precision;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_pass boolean;")
+
+
 def _log_job_event(conn, tenant_id: str, event_type: str, detail: Dict[str, Any], job_id: Optional[str] = None) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -196,6 +203,9 @@ def get_article_output(
     tenant_id = claims.tenant_id
 
     with _db_conn(settings) as conn:
+        _ensure_zerogpt_columns(conn)
+        conn.commit()
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -211,7 +221,9 @@ def get_article_output(
                   draft_meta,
                   created_at,
                   updated_at,
-                  last_run_at
+                  last_run_at,
+                  zerogpt_score,
+                  zerogpt_pass
                 FROM public.article_requests
                 WHERE tenant_id=%s::uuid AND request_id=%s::uuid
                 LIMIT 1;
@@ -239,7 +251,22 @@ def get_article_output(
         created_at,
         updated_at,
         last_run_at,
+        zerogpt_score,
+        zerogpt_pass,
     ) = row
+
+    # Gate: zerogpt must have been run and passed before /output is allowed
+    if zerogpt_pass is None:
+        raise HTTPException(
+            status_code=409,
+            detail="ZeroGPT check not run yet. Call /zerogpt first, then /zerogpt-fix if score >= 10%.",
+        )
+    if zerogpt_pass is False:
+        score_str = f"{float(zerogpt_score):.1f}%" if zerogpt_score is not None else "unknown"
+        raise HTTPException(
+            status_code=409,
+            detail=f"AI score too high ({score_str}). Run /zerogpt-fix to humanize before accessing output.",
+        )
 
     draft_signed = None
     if signed_url and gcs_draft_uri:

@@ -112,6 +112,11 @@ def _ensure_day20_columns(conn) -> None:
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_fingerprint text;")
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_score double precision;")
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_meta jsonb;")
+        # zerogpt-fix columns (added Day 22)
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_pass boolean;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_fix_attempts integer DEFAULT 0;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS gcs_humanized_uri text;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS humanized_fingerprint text;")
 
 
 def _log_job_event(conn, tenant_id: str, event_type: str, detail: Dict[str, Any], request_id: Optional[str] = None) -> None:
@@ -362,6 +367,8 @@ class ZeroGPTResponse(BaseModel):
     draft_fingerprint: str
 
     zerogpt_score: Optional[float] = None
+    zerogpt_pass: bool = False          # True if fakePercentage < 20
+    zerogpt_pass_threshold: float = 20.0
     gcs_zerogpt_uri: str
     zerogpt_fingerprint: str
 
@@ -453,6 +460,7 @@ def run_zerogpt(
                 out_uri = str(row["gcs_zerogpt_uri"])
                 out_fp = str(row["zerogpt_fingerprint"])
                 out_score = row.get("zerogpt_score")
+                cached_pass = (out_score is not None) and (float(out_score) < 10.0)
                 spans_count = int(meta.get("spans_count") or 0) if isinstance(meta, dict) else 0
 
                 signed = _gcs_signed_url(gcs, out_uri, signed_url_minutes) if signed_url else None
@@ -465,6 +473,7 @@ def run_zerogpt(
                     gcs_draft_uri=gcs_draft_uri,
                     draft_fingerprint=draft_fp,
                     zerogpt_score=float(out_score) if out_score is not None else None,
+                    zerogpt_pass=cached_pass,
                     gcs_zerogpt_uri=out_uri,
                     zerogpt_fingerprint=out_fp,
                     spans_count=spans_count,
@@ -502,6 +511,7 @@ def run_zerogpt(
     # ---- Call ZeroGPT (api.zerogpt.com) ----
     resp = _call_zerogpt_zerogpt_com(base_url=base_url, api_key=api_key, text=draft_md, timeout_s=60)
     score, meta = _extract_score(resp)
+    zerogpt_pass = (score is not None) and (score < 20.0)
     try:
         txt_words = int(meta.get("textWords") or 0) if isinstance(meta, dict) else 0
         ai_words = int(meta.get("aiWords") or 0) if isinstance(meta, dict) else 0
@@ -568,6 +578,7 @@ def run_zerogpt(
                 SET gcs_zerogpt_uri=%s,
                     zerogpt_fingerprint=%s,
                     zerogpt_score=%s,
+                    zerogpt_pass=%s,
                     zerogpt_meta=%s::jsonb,
                     updated_at=%s
                 WHERE tenant_id=%s::uuid AND request_id=%s::uuid
@@ -576,6 +587,7 @@ def run_zerogpt(
                     out_uri,
                     out_fp,
                     score,
+                    zerogpt_pass,
                     json.dumps(meta_db),
                     datetime.now(timezone.utc),
                     tenant_id,
@@ -616,6 +628,7 @@ def run_zerogpt(
         gcs_draft_uri=gcs_draft_uri,
         draft_fingerprint=draft_fp,
         zerogpt_score=score,
+        zerogpt_pass=zerogpt_pass,
         gcs_zerogpt_uri=out_uri,
         zerogpt_fingerprint=out_fp,
         spans_count=spans_count,

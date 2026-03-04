@@ -274,6 +274,12 @@ def _count_unique_sections(text: str) -> int:
     return len(seen)
 
 
+def _has_faq_section(text: str) -> bool:
+    """Check if article has an FAQ heading (## FAQ, ## Frequently Asked Questions, etc.)."""
+    text = text or ""
+    return bool(re.search(r"^#{1,3}\s+(?:FAQ|Frequently\s+Asked)", text, re.MULTILINE | re.IGNORECASE))
+
+
 def _sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
@@ -324,11 +330,13 @@ def get_qc_report(
     # plan thresholds (including new quality checks)
     thresholds = {
         "word_count_min": 1900,
-        "word_count_max": 2100,
-        "fk_grade_min": 7.0,
-        "fk_grade_max": 12.0,            # relaxed: technical blogs naturally use multi-syllable terms
+        "word_count_max": 2600,
+        "fk_grade_min": 5.0,
+        "fk_grade_max": 12.0,
+        "flesch_reading_ease_min": 70.0,  # FRE > 70 = easy to read (humanoid style)
         "repetition_ratio_max": 0.15,     # max 15% repeated sentences
-        "unique_sections_min": 4,         # at least 4 distinct sections
+        "unique_sections_min": 6,         # 8-section template, allow 6 minimum
+        "faq_section_required": True,     # must have FAQ or Frequently Asked heading
     }
 
     bucket_name = _pick(settings, "GCS_BUCKET_NAME")
@@ -434,14 +442,19 @@ def get_qc_report(
     metrics = _readability(text)
     wc = int(metrics["word_count"])
     fk = float(metrics["flesch_kincaid_grade"])
+    fre = float(metrics.get("flesch_reading_ease", 0.0))
     rep_ratio = float(metrics.get("repetition_ratio", 0.0))
     unique_sec = int(metrics.get("unique_sections", 0))
+    has_faq = _has_faq_section(text)
+    metrics["has_faq_section"] = has_faq
 
     qc_pass = (
         (thresholds["word_count_min"] <= wc <= thresholds["word_count_max"])
         and (thresholds["fk_grade_min"] <= fk <= thresholds["fk_grade_max"])
+        and (fre >= thresholds["flesch_reading_ease_min"])
         and (rep_ratio <= thresholds["repetition_ratio_max"])
         and (unique_sec >= thresholds["unique_sections_min"])
+        and (has_faq or not thresholds.get("faq_section_required", False))
     )
 
     report = {

@@ -27,12 +27,27 @@ build/
 .DS_Store
 Thumbs.db
 
-# Large binaries / Word docs with sensitive content
+# Large binaries / Word docs / test outputs
 Sighnal_Backend_High_Level_System_Plan.docx
+Stress_Management_GPT5.2_Output.docx
+Stress_Management_GPT52_Final.docx
+Stress_managment_test.docx
+~$*.docx
+
+# Temp scripts and test data
+body.json
+draft_output.json
+draft_info.json
+gpt52_draft.md
+check_draft.py
+clear_qc2.py
+clear_qc_temp.py
+fetch_draft.py
+save_doc.py
 
 # Storage / local data
 storage/
 
 # Compiled
-rg/
+rg
 *.exe

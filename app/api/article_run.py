@@ -18,12 +18,68 @@ from pydantic import BaseModel, Field
 from google.cloud import storage
 from google.api_core.exceptions import PreconditionFailed
 import google.generativeai as genai
+from openai import OpenAI
 
 
 router = APIRouter(prefix="/api/v1/articles", tags=["article-run"])
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+OPENAI_DEFAULT_MODEL = "gpt-5.2-2025-12-11"
+
+# ============================================================
+# Cached system prompt — identical for every article, enables
+# OpenAI prompt caching (50% savings on input tokens after 1st call)
+# ============================================================
+SYSTEM_PROMPT = """You are a real human blogger. Not an AI. Not a copywriter. A real person who's done research on a topic and is sharing what they found — in their own messy, casual, honest voice.
+
+HOW REAL HUMANS WRITE (do ALL of these):
+
+BURSTINESS — wildly vary your sentence length:
+- Some sentences are 3 words. "That's the point."
+- Some are 20+ words with dashes and asides thrown in.
+- Never write 3 sentences in a row that are the same length.
+- A paragraph might be one sentence. The next might be five.
+
+PERPLEXITY — be unpredictable:
+- Don't always pick the most obvious word. Say "wrecked" instead of "damaged." Say "wild" instead of "surprising."
+- Throw in unexpected transitions: "Okay but here's the weird part." "Plot twist." "Wait, it gets better."
+- Use incomplete thoughts sometimes. Let the reader fill in the gap.
+
+FIRST PERSON — you have opinions and experiences:
+- Say "I think", "in my experience", "from what I've seen", "honestly"
+- Share mini-stories: "I tried this once and..." or "A friend of mine..."
+- Have opinions: "This one's my favorite." "I'm not totally sold on this, but..."
+
+CONVERSATIONAL TEXTURE — sound like you're talking:
+- Use contractions everywhere (it's, don't, won't, can't, I've, we're, that's, here's)
+- Start sentences with And, But, So, Or, Okay, Look, Honestly, Thing is
+- Use dashes for asides — like this — instead of formal parenthetical clauses
+- Use ellipses when trailing off... you know what I mean
+- Ask the reader questions: "Right?" "Sound familiar?" "See what I mean?"
+- Use casual fillers: "basically", "pretty much", "kind of", "sort of", "I mean"
+- Use fragments on purpose. For emphasis. Like this.
+
+STRUCTURE — break the AI pattern:
+- Paragraphs are 1-4 lines. Some are just one line.
+- Use bullet lists but keep them casual, not corporate
+- Headings can be playful: "Why Sleep Matters (More Than You Think)"
+- Don't wrap up sections with neat summary sentences. Just move on.
+
+BANNED — these words/phrases scream "AI wrote this":
+delve, leverage, furthermore, moreover, it's worth noting, in conclusion,
+pivotal, tapestry, embark, navigate, landscape, realm, cutting-edge,
+game-changer, revolutionize, comprehensive, utilizing, facilitate,
+it is important to note, in today's world, in the realm of, it's crucial,
+paramount, foster, streamline, robust, seamless, synergy, harness,
+notable, significant, vital, essential, underscores, multifaceted,
+a testament to, it should be noted, this serves as, plays a crucial role
+
+SELF-CHECK after each section:
+- Read it out loud. Does it sound like a person talking? If it sounds like an essay, rewrite it.
+- Count sentence lengths. If 3+ sentences in a row are similar length, vary them.
+- Would you actually say this to a friend? If not, make it more casual.
+- Did you start any sentence with "This" or "These" or "It is"? Rewrite those."""
 
 
 # ============================================================
@@ -559,6 +615,145 @@ def _generate_draft_json_groq(
     raise HTTPException(status_code=502, detail=f"Groq draft generation failed. Last error: {last_err}")
 
 
+# ============================================================
+# OpenAI GPT-5.2 — Outline-first two-call architecture
+# ============================================================
+def _generate_outline_openai(
+    client: OpenAI,
+    model: str,
+    title: str,
+    keywords: List[str],
+    sources_block: str,
+    *,
+    temperature: float = 0.7,
+) -> Tuple[str, Dict[str, int]]:
+    """Call 1: Generate a structured outline (~900 tokens). Cheap planning step."""
+    kw = ", ".join(keywords or [])
+    outline_prompt = f"""I'm writing a blog post about "{title}" and I need to plan it out.
+Keywords to hit: {kw}
+
+For each section, give me:
+- A heading (can be playful — not boring corporate headings)
+- 3-4 bullet points of what I should cover (pull from the sources)
+- A personal angle, analogy, or mini-story idea I can use
+- Rough word count target
+
+Here's my structure — 8 sections:
+1. Hook intro (150-180 words) — start with a question, a bold statement, or a mini-story. NO "in today's world" nonsense.
+2. The basics — what is {title}? (250-280 words) — explain it like I'm telling my friend at a coffee shop
+3. Why anyone should care (250-280 words) — real impact, real people, not abstract fluff
+4. How it actually works (350-400 words) — walk through it step by step, keep it dead simple
+5. Real stories / examples (300-350 words) — 2-3 concrete, relatable examples
+6. Mistakes people make (200-250 words) — common traps, things I've seen go wrong
+7. FAQ section (200-230 words) — 5-8 quick Q&As, super casual answers
+8. Wrap up / takeaways (150-180 words) — bullet summary, keep it punchy
+
+Aiming for 1900-2300 words total.
+
+SOURCES (use these for facts):
+{sources_block}
+
+Give me the outline as markdown with ## headings and bullets."""
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": outline_prompt},
+        ],
+        temperature=temperature,
+        max_completion_tokens=1024,
+    )
+    outline = (resp.choices[0].message.content or "").strip()
+    u = resp.usage
+    usage = {
+        "prompt_tokens": u.prompt_tokens if u else 0,
+        "output_tokens": u.completion_tokens if u else 0,
+        "total_tokens": u.total_tokens if u else 0,
+    }
+    return outline, usage
+
+
+def _generate_draft_openai(
+    client: OpenAI,
+    model: str,
+    title: str,
+    keywords: List[str],
+    outline: str,
+    sources_block: str,
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 8192,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    """Call 2: Generate the full 2000-word article guided by the outline (~6000 tokens)."""
+    kw = ", ".join(keywords or [])
+    draft_prompt = f"""Okay, write the full blog post on "{title}" based on this outline.
+Keywords: {kw}
+
+OUTLINE:
+{outline}
+
+RULES — read these carefully:
+- Follow the outline section by section. Hit every section's word count.
+- 1900-2300 words total. Do NOT stop early. Write the whole thing.
+- Each section = new info. If you already said it, don't say it again.
+- FAQ: 5-8 questions, casual short answers.
+- Use the sources for facts. Don't make stuff up. If sources don't cover something, just say "I couldn't find solid info on this" and move on.
+
+STYLE — this is the most important part. Write EXACTLY like this example:
+
+---
+## Okay So What Even Is Cloud Computing?
+
+You ever watch Netflix on your phone and then switch to your TV and it just... picks up where you left off? That's cloud computing doing its thing. Your show isn't saved on your phone — it lives on some massive computer in a warehouse somewhere. Probably Oregon. Or Ireland. Who knows.
+
+Here's how I think about it. You know how libraries work? You don't buy every single book. You just borrow what you need and return it when you're done. Cloud computing is basically that — but for computer stuff.
+
+So the simple version? You're using someone else's really powerful computers through the internet. That's it. That's the whole concept.
+
+### Why Should You Even Care?
+
+Okay so here's where it gets good. Think about your phone photos. I've got like 12,000 on mine (don't judge me). Eventually you run out of space. It happens to everyone.
+
+But with cloud storage — which is just one flavor of cloud computing — your photos live online. You can pull them up from any device. Your phone could fall in a lake tomorrow and your photos would be fine.
+
+Honestly? That alone makes it worth understanding.
+---
+
+Notice what makes that feel human:
+- Sentence lengths go from 3 words to 25 words — randomly
+- Starts sentences with "So", "But", "Okay", "And", "Honestly?"
+- Has opinions: "don't judge me", "that alone makes it worth it"
+- Uses dashes, ellipses, fragments
+- Doesn't wrap up sections neatly — just moves on
+- Feels like someone talking, not writing an essay
+
+SOURCES:
+{sources_block}
+
+Write the full article now. Markdown only — no intro text, no "here's the article", just the article itself."""
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},  # CACHE HIT from outline call
+            {"role": "user", "content": draft_prompt},
+        ],
+        temperature=temperature,
+        max_completion_tokens=max_tokens,
+    )
+    content = (resp.choices[0].message.content or "").strip()
+    parsed = {"title": title, "draft_markdown": content, "used_chunks": []}
+
+    u = resp.usage
+    usage = {
+        "prompt_tokens": u.prompt_tokens if u else 0,
+        "output_tokens": u.completion_tokens if u else 0,
+        "total_tokens": u.total_tokens if u else 0,
+    }
+    return parsed, usage
+
+
 def _build_article_prompt(title: str, keywords: List[str], length_target: int, sources: List[Dict[str, Any]]) -> str:
     """
     Builds a blog-quality prompt: layman audience, structured outline,
@@ -626,9 +821,9 @@ class RunRequest(BaseModel):
     output_dimensionality: int = 1536
 
     # generation
-    draft_provider: str = "groq"  # "groq" or "gemini"
-    draft_model: str = GROQ_DEFAULT_MODEL
-    temperature: float = 0.35
+    draft_provider: str = "openai"  # "openai", "groq", or "gemini"
+    draft_model: str = ""  # auto-detected from env
+    temperature: float = 0.7
     max_output_tokens: int = 8192
 
     # where to store
@@ -798,14 +993,61 @@ def run_article_request(
         raise HTTPException(status_code=409, detail="No source chunks found. Ensure KB has embedded chunks (Day14)")
 
     # ---- Draft generation ----
-    prompt = _build_article_prompt(title, keywords, length_target, used_sources)
-    groq_api_key = _pick(settings, "GROQ_API_KEY")
+    # Build sources block for prompt
+    src_lines = []
+    for s in used_sources:
+        src_lines.append(f"[SOURCE doc_id={s['doc_id']} chunk_id={s['chunk_id']}]\n{s['text']}\n")
+    sources_block = "\n".join(src_lines)
 
     provider = (req.draft_provider or "").lower().strip()
-    if provider == "groq":
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    groq_api_key = _pick(settings, "GROQ_API_KEY")
+
+    # Auto-detect: prefer OpenAI if key is set, even if user didn't specify
+    if provider == "openai" or (provider == "" and openai_api_key):
+        provider = "openai"
+
+    if provider == "openai":
+        if not openai_api_key:
+            raise HTTPException(status_code=500, detail="Missing OPENAI_API_KEY for draft_provider=openai")
+
+        client = OpenAI(api_key=openai_api_key)
+        model_used = req.draft_model or os.getenv("OPENAI_MODEL", OPENAI_DEFAULT_MODEL)
+
+        # Call 1: Outline (cheap, ~900 tokens)
+        outline, outline_usage = _generate_outline_openai(
+            client=client,
+            model=model_used,
+            title=title,
+            keywords=keywords,
+            sources_block=sources_block,
+            temperature=float(req.temperature),
+        )
+
+        # Call 2: Full draft guided by outline (~6000 tokens)
+        draft_json, draft_usage = _generate_draft_openai(
+            client=client,
+            model=model_used,
+            title=title,
+            keywords=keywords,
+            outline=outline,
+            sources_block=sources_block,
+            temperature=float(req.temperature),
+            max_tokens=int(req.max_output_tokens),
+        )
+
+        # Combine usage from both calls
+        usage = {
+            "prompt_tokens": outline_usage["prompt_tokens"] + draft_usage["prompt_tokens"],
+            "output_tokens": outline_usage["output_tokens"] + draft_usage["output_tokens"],
+            "total_tokens": outline_usage["total_tokens"] + draft_usage["total_tokens"],
+        }
+
+    elif provider == "groq":
         if not groq_api_key:
             raise HTTPException(status_code=500, detail="Missing GROQ_API_KEY for draft_provider=groq")
 
+        prompt = _build_article_prompt(title, keywords, length_target, used_sources)
         model_used = req.draft_model or GROQ_DEFAULT_MODEL
         draft_json, usage = _generate_draft_json_groq(
             groq_api_key=str(groq_api_key),
@@ -817,8 +1059,9 @@ def run_article_request(
             retries=3,
         )
     else:
-        # fallback to Gemini (optional)
-        model_used = req.draft_model
+        # fallback to Gemini
+        prompt = _build_article_prompt(title, keywords, length_target, used_sources)
+        model_used = req.draft_model or "gemini-2.5-flash"
         draft_json, usage = _generate_draft_json(
             api_key=api_key,
             model_name=model_used,

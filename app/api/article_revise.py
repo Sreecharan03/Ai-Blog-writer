@@ -17,6 +17,7 @@ from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from google.cloud import storage
 from google.api_core.exceptions import PreconditionFailed
+from openai import OpenAI
 
 router = APIRouter(prefix="/api/v1/articles", tags=["article-qc-fix"])
 
@@ -114,6 +115,11 @@ def _ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_fingerprint text;")
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_score double precision;")
         cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_meta jsonb;")
+        # zerogpt-fix columns (added Day 22)
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_pass boolean;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS zerogpt_fix_attempts integer DEFAULT 0;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS gcs_humanized_uri text;")
+        cur.execute("ALTER TABLE public.article_requests ADD COLUMN IF NOT EXISTS humanized_fingerprint text;")
 
         cur.execute(
             """
@@ -484,13 +490,70 @@ def _groq_json(
 
 
 # -----------------------------
+# OpenAI JSON call (replaces Groq for QC-fix when OPENAI_API_KEY is set)
+# -----------------------------
+def _openai_json(
+    *,
+    model: str,
+    system: str,
+    prompt: str,
+    temp: float,
+    max_tokens: int,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    """Call OpenAI GPT-5.2 with JSON response format for QC-fix rewrites."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing OPENAI_API_KEY for QC-fix")
+    client = OpenAI(api_key=api_key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=temp,
+        max_completion_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    content = (resp.choices[0].message.content or "").strip()
+    parsed = _safe_json(content) or _safe_json(_extract_obj(content) or "")
+    if not parsed:
+        raise HTTPException(status_code=502, detail="OpenAI QC-fix returned non-JSON response")
+    u = resp.usage
+    usage = {
+        "prompt_tokens": u.prompt_tokens if u else 0,
+        "output_tokens": u.completion_tokens if u else 0,
+        "total_tokens": u.total_tokens if u else 0,
+    }
+    return parsed, usage
+
+
+def _llm_json(
+    key: str,
+    *,
+    model: str,
+    system: str,
+    prompt: str,
+    temp: float,
+    max_tokens: int,
+    timeout_s: int = 90,
+    retries: int = 2,
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    """Route QC-fix calls to OpenAI (preferred) or Groq (fallback)."""
+    if os.getenv("OPENAI_API_KEY"):
+        openai_model = os.getenv("OPENAI_MODEL", "gpt-5.2-2025-12-11")
+        return _openai_json(model=openai_model, system=system, prompt=prompt, temp=temp, max_tokens=max_tokens)
+    return _groq_json(key, model=model, system=system, prompt=prompt, temp=temp, max_tokens=max_tokens, timeout_s=timeout_s, retries=retries)
+
+
+# -----------------------------
 # API models
 # -----------------------------
 class QCFixRequest(BaseModel):
-    model: str = "llama-3.3-70b-versatile"
-    temperature: float = 0.15
+    model: str = ""  # auto-detected from env
+    temperature: float = 0.3
     max_output_tokens: int = 9000
-    max_passes: int = 8  # deterministic loop needs more than 2
+    max_passes: int = 8
 
 
 class QCFixResponse(BaseModel):
@@ -537,7 +600,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
     gcs = _gcs_client(settings)
     articles_prefix = _norm(_pick(settings, "GCS_PREFIX_ARTICLES", default="articles/"))
 
-    thresholds = {"wc_min": 1900, "wc_max": 2100, "fk_min": 7.0, "fk_max": 12.0}
+    thresholds = {"wc_min": 1900, "wc_max": 2600, "fk_min": 5.0, "fk_max": 12.0, "fre_min": 70.0}
 
     tok = ""
     locked = False
@@ -676,17 +739,19 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                         "Each new section MUST cover a DIFFERENT aspect not already in the draft.",
                         "Do NOT repeat any heading, topic, or idea already present.",
                         "Use ## headings + bullet lists + short paragraphs (2-4 lines).",
-                        "Use simple words and short sentences.",
-                        "Target FK <= 8.8.",
+                        "Write in warm, friendly tone — like explaining to a child.",
+                        "Use contractions (it's, don't, you'll) and everyday analogies.",
+                        "Target Flesch Reading Ease > 75 and FK <= 8.8.",
                         f"Add at least {to_add} words in this call (minimum).",
-                        "Add concrete examples, steps, checklists, or a mini FAQ.",
+                        "If the article lacks a FAQ section, add one with 5-8 simple questions and short answers.",
+                        "Add concrete examples, steps, checklists, or relatable stories.",
                         "Keep the topic consistent with the title + keywords.",
                         "Return JSON: { append_markdown: string } only.",
                     ],
                     "draft_markdown_input": current,
                 }
 
-                parsed, usage = _groq_json(
+                parsed, usage = _llm_json(
                     str(groq_key),
                     model=req.model,
                     system=system,
@@ -759,7 +824,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "draft_markdown_input": current,
                 }
 
-                parsed, usage = _groq_json(
+                parsed, usage = _llm_json(
                     str(groq_key),
                     model=req.model,
                     system=system,
@@ -801,9 +866,10 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "Aim for 2000-2030 words.",
                     "If above max, cut sentences until within range.",
                     "If below min, add short bullets to reach the minimum.",
-                    "Target FK <= 8.8.",
-                    "Replace long/complex words with shorter synonyms.",
-                    "Use active voice and simple verbs.",
+                    "Target Flesch Reading Ease > 75 and FK <= 8.8.",
+                    "Replace long/complex words with shorter 1-2 syllable synonyms.",
+                    "Use active voice, simple verbs, and everyday analogies.",
+                    "Use contractions naturally (it's, don't, you'll, we've).",
                     "Keep sentences under 20 words where possible.",
                     "Prefer bullets over long paragraphs.",
                     "PRESERVE the original meaning and structure of each sentence.",
@@ -815,6 +881,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                         "Simplify vocabulary but keep sentence structure intact.",
                         "Convert dense paragraphs into bullet lists.",
                         "Use 1-2 syllable words where a simpler synonym exists.",
+                        "Use everyday analogies to explain hard concepts.",
                     ]
 
                 prompt = {
@@ -827,7 +894,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "draft_markdown_input": current,
                 }
 
-                parsed, usage = _groq_json(
+                parsed, usage = _llm_json(
                     str(groq_key),
                     model=req.model,
                     system=system,
@@ -861,7 +928,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                         "hard_rules": hard_rules2,
                         "draft_markdown_input": current,
                     }
-                    parsed2, usage2 = _groq_json(
+                    parsed2, usage2 = _llm_json(
                         str(groq_key),
                         model=req.model,
                         system=system,
@@ -924,7 +991,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     ],
                     "draft_markdown_input": current,
                 }
-                parsed, usage = _groq_json(
+                parsed, usage = _llm_json(
                     str(groq_key),
                     model=req.model,
                     system=system,
@@ -1008,6 +1075,10 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                         zerogpt_fingerprint=NULL,
                         zerogpt_score=NULL,
                         zerogpt_meta=NULL,
+                        zerogpt_pass=NULL,
+                        gcs_humanized_uri=NULL,
+                        humanized_fingerprint=NULL,
+                        zerogpt_fix_attempts=0,
 
                         updated_at=%s
                     WHERE tenant_id=%s::uuid AND request_id=%s::uuid

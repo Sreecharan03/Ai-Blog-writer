@@ -47,6 +47,9 @@ supabase
 # LLM + embeddings (Gemini)
 google-generativeai
 
+# OpenAI (GPT-5.2 — primary article LLM)
+openai
+
 # Workflow orchestration (LangGraph)
 langgraph
 
