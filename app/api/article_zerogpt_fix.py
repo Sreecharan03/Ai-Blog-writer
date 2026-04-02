@@ -476,6 +476,7 @@ RULES:
 - Use contractions everywhere (it's, don't, won't, can't, I've, that's).
 - AVOID: {ai_clichés}
 - Keep the same meaning and facts. Don't invent new info.
+- CRITICAL: Do NOT add words. Keep the same or fewer words. Replace, don't expand.
 - Return the COMPLETE article with replacements applied.
 
 ARTICLE:
@@ -509,7 +510,7 @@ RULES:
 - Add personal touches: "I think", "honestly", "in my experience", "here's what I found"
 - AVOID: {ai_clichés}
 - Vary sentence length wildly: some 3 words, some 20 words.
-- Keep roughly the same word count.
+- CRITICAL: Do NOT add words. Keep the same or fewer words. Replace, don't expand.
 - Return the COMPLETE rewritten article in markdown.
 
 ARTICLE:

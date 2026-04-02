@@ -600,7 +600,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
     gcs = _gcs_client(settings)
     articles_prefix = _norm(_pick(settings, "GCS_PREFIX_ARTICLES", default="articles/"))
 
-    thresholds = {"wc_min": 1900, "wc_max": 2600, "fk_min": 5.0, "fk_max": 12.0, "fre_min": 70.0}
+    thresholds = {"wc_min": 1900, "wc_max": 2500, "fk_min": 5.0, "fk_max": 12.0, "fre_min": 70.0}
 
     tok = ""
     locked = False

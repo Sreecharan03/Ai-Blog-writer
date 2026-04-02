@@ -40,10 +40,18 @@ draft_output.json
 draft_info.json
 gpt52_draft.md
 check_draft.py
-clear_qc2.py
+check_crawl.py
+clear_qc*.py
 clear_qc_temp.py
 fetch_draft.py
 save_doc.py
+save_blog_doc.py
+crawl_all.py
+crawl_body.json
+cricbuzz_links.txt
+cricbuzz_raw.html
+process_all.py
+IPL2025_*.docx
 
 # Storage / local data
 storage/

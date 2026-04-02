@@ -639,16 +639,16 @@ For each section, give me:
 - Rough word count target
 
 Here's my structure — 8 sections:
-1. Hook intro (150-180 words) — start with a question, a bold statement, or a mini-story. NO "in today's world" nonsense.
-2. The basics — what is {title}? (250-280 words) — explain it like I'm telling my friend at a coffee shop
-3. Why anyone should care (250-280 words) — real impact, real people, not abstract fluff
-4. How it actually works (350-400 words) — walk through it step by step, keep it dead simple
-5. Real stories / examples (300-350 words) — 2-3 concrete, relatable examples
-6. Mistakes people make (200-250 words) — common traps, things I've seen go wrong
-7. FAQ section (200-230 words) — 5-8 quick Q&As, super casual answers
-8. Wrap up / takeaways (150-180 words) — bullet summary, keep it punchy
+1. Hook intro (80-100 words) — start with a question, a bold statement, or a mini-story. NO "in today's world" nonsense.
+2. The basics — what is {title}? (150-180 words) — explain it like I'm telling my friend at a coffee shop
+3. Why anyone should care (150-180 words) — real impact, real people, not abstract fluff
+4. How it actually works (200-230 words) — walk through it step by step, keep it dead simple
+5. Real stories / examples (200-230 words) — 2-3 concrete, relatable examples
+6. Mistakes people make (100-130 words) — common traps, things I've seen go wrong
+7. FAQ section (120-150 words) — 5-8 quick Q&As, super casual answers
+8. Wrap up / takeaways (80-100 words) — bullet summary, keep it punchy
 
-Aiming for 1900-2300 words total.
+HARD LIMIT: 1400-1600 words. You MUST stop at 1600 words. Count as you write.
 
 SOURCES (use these for facts):
 {sources_block}
@@ -695,7 +695,7 @@ OUTLINE:
 
 RULES — read these carefully:
 - Follow the outline section by section. Hit every section's word count.
-- 1900-2300 words total. Do NOT stop early. Write the whole thing.
+- HARD LIMIT: 1400-1600 words. You MUST stop at 1600 words. Count as you write.
 - Each section = new info. If you already said it, don't say it again.
 - FAQ: 5-8 questions, casual short answers.
 - Use the sources for facts. Don't make stuff up. If sources don't cover something, just say "I couldn't find solid info on this" and move on.

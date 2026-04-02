@@ -214,6 +214,7 @@ class URLIngestRequest(BaseModel):
         description="If restrict_path_prefix is not set, infer a locale prefix from the seed URL (like /in/en/)",
     )
     wait: bool = Field(False, description="If true, crawl runs inline; else runs in BackgroundTasks")
+    auto_pipeline: bool = Field(True, description="Auto preprocess+chunk+embed each page after extraction")
 
 
 class URLIngestResponse(BaseModel):
@@ -663,18 +664,159 @@ def _normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
-def extract_from_html(content: bytes, url: str, headers: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
-    html_text = _decode_text(content, headers)
+def _universal_post_clean(text: str) -> str:
+    """
+    Website-agnostic post-extraction cleanup.
+    Removes universal noise patterns that appear on ANY website:
+    social buttons, copyright lines, duplicate lines, trailing related-content blocks.
+    """
+    if not text:
+        return text
+    lines = text.split("\n")
+    cleaned: List[str] = []
+    prev = ""
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if cleaned and cleaned[-1] != "":
+                cleaned.append("")  # keep one blank line
+            continue
+        # Skip exact duplicate consecutive lines
+        if s == prev:
+            continue
+        # Skip near-duplicate consecutive lines (e.g. image caption with/without space before ©)
+        if prev and len(s) > 20 and len(prev) > 20:
+            # Normalize: strip © and everything after, compare
+            s_core = re.sub(r"\s*©.*$", "", s).strip()
+            prev_core = re.sub(r"\s*©.*$", "", prev).strip()
+            if s_core and s_core == prev_core:
+                continue
+        # Skip standalone social share buttons
+        if s in ("Share", "Tweet", "Pin", "Email", "Print", "Copy Link", "Share Tweet",
+                 "Like", "Save", "Bookmark", "Comments", "comment"):
+            continue
+        # Skip standalone copyright lines (short, starts with ©)
+        if s.startswith("\u00a9") and len(s) < 120:
+            continue
+        # Strip inline © attribution from end of lines (e.g. "Photo caption © AFP")
+        s = re.sub(r"\s*©\s*[A-Z][A-Za-z/]*\s*$", "", s).strip()
+        if not s:
+            continue
+        # Skip "by Author •" standalone byline noise (very short with bullet)
+        if s == "\u2022" or s == "•":
+            continue
+        prev = s
+        cleaned.append(s)
 
+    # Trim trailing noise: "RELATED STORIES", "LATEST NEWS", "More News", etc.
+    # These appear as clusters of short lines (titles of other articles) at the end
+    _tail_keywords = {
+        "RELATED STORIES", "LATEST NEWS", "More News", "More Stories",
+        "READ MORE", "ALSO READ", "TRENDING", "POPULAR", "TOP STORIES",
+        "LATEST PHOTOS", "TAGS", "RECOMMENDED", "YOU MAY ALSO LIKE",
+        "MOST READ", "EDITOR'S PICKS", "EDITORS PICKS", "SEE ALSO",
+    }
+    # Walk backwards: remove lines that are part of trailing noise
+    while cleaned:
+        last = cleaned[-1].strip()
+        if not last:
+            cleaned.pop()
+            continue
+        # Exact match on noise headings
+        if last.upper() in _tail_keywords:
+            cleaned.pop()
+            continue
+        # Short lines at the very end after a noise heading was already removed
+        # (these are article titles from "Related Stories" etc.)
+        # Stop if we hit a substantial line (>60 chars or starts with heading marker)
+        if len(last) < 80 and not last.startswith("#"):
+            # Check if there are more short lines below (cluster detection)
+            # We already removed some, so keep going if recent lines are short
+            if len(cleaned) >= 2 and len(cleaned[-2].strip()) < 80:
+                cleaned.pop()
+                continue
+        break
+
+    return "\n".join(cleaned).strip()
+
+
+def _extract_html_trafilatura(html_text: str) -> Optional[str]:
+    """Layer 1: trafilatura — ML-trained content extraction. Works on any website."""
+    try:
+        import trafilatura
+        text = trafilatura.extract(
+            html_text,
+            include_comments=False,
+            include_tables=True,
+            favor_recall=True,
+            deduplicate=True,
+        )
+        return text if text and len(text) >= 200 else None
+    except Exception:
+        return None
+
+
+def _extract_html_readability(html_text: str) -> Optional[str]:
+    """Layer 2: readability-lxml — Mozilla Reader Mode algorithm."""
+    try:
+        from readability import Document
+        from bs4 import BeautifulSoup  # type: ignore
+        doc = Document(html_text)
+        readable_html = doc.summary()
+        soup = BeautifulSoup(readable_html, "lxml" if _bs4_lxml_available() else "html.parser")
+        text = soup.get_text(separator="\n", strip=True)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text if text and len(text) >= 200 else None
+    except Exception:
+        return None
+
+
+def _extract_html_bs4(html_text: str) -> Optional[str]:
+    """Layer 3: BeautifulSoup manual extraction — original crawler logic."""
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+        soup = BeautifulSoup(html_text, "lxml" if _bs4_lxml_available() else "html.parser")
+        _strip_boilerplate(soup)
+        main = _pick_main_container(soup)
+
+        lines: List[str] = []
+        for el in main.find_all(["h1", "h2", "h3", "h4", "p", "li", "table"], recursive=True):
+            if el.name in ("h1", "h2", "h3", "h4"):
+                t = el.get_text(" ", strip=True)
+                if t:
+                    lines.append(f"\n# {t}\n")
+            elif el.name == "p":
+                t = el.get_text(" ", strip=True)
+                if t:
+                    lines.append(t)
+            elif el.name == "li":
+                t = el.get_text(" ", strip=True)
+                if t:
+                    lines.append(f"- {t}")
+            elif el.name == "table":
+                rows = []
+                for tr in el.find_all("tr"):
+                    cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+                    cells = [c for c in cells if c]
+                    if cells:
+                        rows.append(" | ".join(cells))
+                if rows:
+                    lines.append("\n[Table]\n" + "\n".join(rows) + "\n[/Table]\n")
+
+        text = "\n".join(lines)
+        return text if text and len(text) >= 200 else None
+    except Exception:
+        return None
+
+
+def _extract_html_meta(html_text: str, url: str) -> Dict[str, Any]:
+    """Extract page metadata (title, canonical, description, lang) from HTML."""
     meta: Dict[str, Any] = {"url": url}
     try:
         from bs4 import BeautifulSoup  # type: ignore
-
         soup = BeautifulSoup(html_text, "lxml" if _bs4_lxml_available() else "html.parser")
 
-        # meta basics
-        title = (soup.title.get_text(strip=True) if soup.title else "").strip()
-        meta["title"] = title
+        meta["title"] = (soup.title.get_text(strip=True) if soup.title else "").strip()
 
         canonical = ""
         link_can = soup.find("link", rel=lambda v: v and "canonical" in str(v).lower())
@@ -692,50 +834,62 @@ def extract_from_html(content: bytes, url: str, headers: Dict[str, str]) -> Tupl
         if soup.html and soup.html.get("lang"):
             lang = str(soup.html.get("lang")).strip()
         meta["lang"] = lang
-
-        _strip_boilerplate(soup)
-        main = _pick_main_container(soup)
-
-        # extract headings + paragraphs + lists + tables in readable order
-        lines: List[str] = []
-        for el in main.find_all(["h1", "h2", "h3", "h4", "p", "li", "table"], recursive=True):
-            if el.name in ("h1", "h2", "h3", "h4"):
-                t = el.get_text(" ", strip=True)
-                if t:
-                    lines.append(f"\n# {t}\n")
-            elif el.name == "p":
-                t = el.get_text(" ", strip=True)
-                if t:
-                    lines.append(t)
-            elif el.name == "li":
-                t = el.get_text(" ", strip=True)
-                if t:
-                    lines.append(f"- {t}")
-            elif el.name == "table":
-                # simple table flatten
-                rows = []
-                for tr in el.find_all("tr"):
-                    cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
-                    cells = [c for c in cells if c]
-                    if cells:
-                        rows.append(" | ".join(cells))
-                if rows:
-                    lines.append("\n[Table]\n" + "\n".join(rows) + "\n[/Table]\n")
-
-        text = _normalize_whitespace("\n".join(lines))
-        meta["extraction_method"] = "html:bs4_main"
-        meta["raw_length"] = len(html_text)
-        meta["extracted_chars"] = len(text)
-        return text, meta
     except Exception:
-        # fallback: strip tags crude
-        crude = re.sub(r"<(script|style).*?>.*?</\1>", " ", html_text, flags=re.I | re.S)
-        crude = re.sub(r"<[^>]+>", " ", crude)
-        text = _normalize_whitespace(crude)
-        meta["extraction_method"] = "html:regex_fallback"
-        meta["raw_length"] = len(html_text)
-        meta["extracted_chars"] = len(text)
-        return text, meta
+        pass
+    return meta
+
+
+def extract_from_html(content: bytes, url: str, headers: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
+    """
+    3-layer HTML content extraction:
+      Layer 1: trafilatura    — ML-trained, best quality, works on any website
+      Layer 2: readability    — Mozilla Reader Mode algorithm
+      Layer 3: BS4 manual     — original crawler logic (boilerplate strip + main container)
+      Layer 4: regex fallback — crude HTML tag stripping
+
+    All layers followed by universal post-clean (dedup, social buttons, copyright, trailing noise).
+    """
+    html_text = _decode_text(content, headers)
+    meta = _extract_html_meta(html_text, url)
+
+    # Layer 1: trafilatura (best quality, ML-based)
+    text = _extract_html_trafilatura(html_text)
+    if text:
+        text = _universal_post_clean(_normalize_whitespace(text))
+        if len(text) >= 200:
+            meta["extraction_method"] = "html:trafilatura"
+            meta["raw_length"] = len(html_text)
+            meta["extracted_chars"] = len(text)
+            return text, meta
+
+    # Layer 2: readability-lxml (Mozilla Reader Mode)
+    text = _extract_html_readability(html_text)
+    if text:
+        text = _universal_post_clean(_normalize_whitespace(text))
+        if len(text) >= 200:
+            meta["extraction_method"] = "html:readability"
+            meta["raw_length"] = len(html_text)
+            meta["extracted_chars"] = len(text)
+            return text, meta
+
+    # Layer 3: BS4 manual extraction (original logic)
+    text = _extract_html_bs4(html_text)
+    if text:
+        text = _universal_post_clean(_normalize_whitespace(text))
+        if len(text) >= 200:
+            meta["extraction_method"] = "html:bs4_main"
+            meta["raw_length"] = len(html_text)
+            meta["extracted_chars"] = len(text)
+            return text, meta
+
+    # Layer 4: regex fallback (last resort)
+    crude = re.sub(r"<(script|style).*?>.*?</\1>", " ", html_text, flags=re.I | re.S)
+    crude = re.sub(r"<[^>]+>", " ", crude)
+    text = _universal_post_clean(_normalize_whitespace(crude))
+    meta["extraction_method"] = "html:regex_fallback"
+    meta["raw_length"] = len(html_text)
+    meta["extracted_chars"] = len(text)
+    return text, meta
 
 
 def extract_from_txt(content: bytes, headers: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
@@ -1009,6 +1163,221 @@ def _safe_object_name(name: str) -> str:
     name = re.sub(r"[^\w\-.() ]+", "_", name)
     name = name.strip().replace(" ", "_")
     return name[:180] if len(name) > 180 else name
+
+
+def _auto_pipeline_page(
+    *,
+    doc_id: str,
+    tenant_id: str,
+    kb_id: str,
+    extracted_text: str,
+    text_fingerprint: str,
+    gcs: Any,
+    bucket_name: str,
+    settings: Any,
+) -> Dict[str, Any]:
+    """
+    Auto preprocess → chunk → embed a single crawled page.
+    Uses core functions directly (no HTTP calls, no FastAPI deps).
+    Returns stats dict with pipeline results.
+    """
+    from app.api.preprocess import clean_text
+    from app.api.chunk import chunk_text_dynamic
+
+    pipeline_stats: Dict[str, Any] = {"doc_id": doc_id, "preprocessed": False, "chunked": False, "embedded": False}
+
+    # ── 1. Preprocess (clean text) ──
+    try:
+        cleaned, clean_stats, clean_meta = clean_text(
+            extracted_text,
+            remove_boilerplate=True,
+            standardize_bullets=True,
+            standardize_headings=True,
+        )
+        if not cleaned or len(cleaned) < 100:
+            pipeline_stats["skip_reason"] = "cleaned_text_too_short"
+            return pipeline_stats
+
+        clean_fingerprint = _sha256_text(cleaned)
+        clean_obj = f"processed/{tenant_id}/{kb_id}/{doc_id}/clean_v1/{clean_fingerprint}.txt"
+        gcs_clean_uri = _gcs_upload_bytes(gcs, bucket_name, clean_obj, cleaned.encode("utf-8"), content_type="text/plain; charset=utf-8")
+
+        # Store preprocess output in DB (matches preprocess.py schema exactly)
+        with _supabase_conn(settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public.preprocess_outputs
+                        (output_id, tenant_id, kb_id, doc_id, preprocessing_version, input_text_fingerprint,
+                         clean_fingerprint, gcs_clean_uri, cleaned_chars, method, meta, created_at)
+                    VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
+                    ON CONFLICT (tenant_id, kb_id, doc_id, preprocessing_version) DO UPDATE SET
+                        input_text_fingerprint = EXCLUDED.input_text_fingerprint,
+                        clean_fingerprint = EXCLUDED.clean_fingerprint,
+                        gcs_clean_uri = EXCLUDED.gcs_clean_uri,
+                        cleaned_chars = EXCLUDED.cleaned_chars,
+                        method = EXCLUDED.method,
+                        meta = EXCLUDED.meta,
+                        created_at = now()
+                    """,
+                    (str(uuid.uuid4()), tenant_id, kb_id, doc_id, "v1", text_fingerprint,
+                     clean_fingerprint, gcs_clean_uri, len(cleaned), "clean:v1:auto_pipeline",
+                     json.dumps({"auto_pipeline": True, "input_chars": len(extracted_text), "output_chars": len(cleaned)})),
+                )
+            conn.commit()
+        pipeline_stats["preprocessed"] = True
+        pipeline_stats["cleaned_chars"] = len(cleaned)
+    except Exception as e:
+        logger.warning("auto_pipeline preprocess failed for doc_id=%s: %s", doc_id, str(e)[:200])
+        pipeline_stats["preprocess_error"] = str(e)[:200]
+        return pipeline_stats
+
+    # ── 2. Chunk ──
+    try:
+        chunk_size = 2000
+        overlap = 200
+        max_chunks = 5000
+        chunks = chunk_text_dynamic(
+            text=cleaned,
+            chunk_size_chars=chunk_size,
+            overlap_chars=overlap,
+            max_chunks=max_chunks,
+        )
+        if not chunks:
+            pipeline_stats["skip_reason"] = "no_chunks"
+            return pipeline_stats
+
+        # Build JSONL + manifest
+        params_hash = _sha256_text(f"{chunk_size}:{overlap}:{max_chunks}")
+        chunk_rows = []
+        jsonl_lines = []
+        for idx, ch in enumerate(chunks):
+            chunk_id = str(uuid.uuid4())
+            chunk_fp = _sha256_text(ch["text"])
+            row = {
+                "chunk_id": chunk_id,
+                "tenant_id": tenant_id,
+                "kb_id": kb_id,
+                "doc_id": doc_id,
+                "chunk_index": idx,
+                "section_path": ch.get("section_path", ""),
+                "start_char": ch.get("start_char", 0),
+                "end_char": ch.get("end_char", 0),
+                "text": ch["text"],
+                "chunk_fingerprint": chunk_fp,
+            }
+            jsonl_lines.append(json.dumps(row, ensure_ascii=False))
+            chunk_rows.append(row)
+
+        jsonl_bytes = ("\n".join(jsonl_lines)).encode("utf-8")
+        chunks_obj = f"processed/{tenant_id}/{kb_id}/{doc_id}/chunks_v1/{clean_fingerprint}_{params_hash}.jsonl"
+        gcs_chunks_uri = _gcs_upload_bytes(gcs, bucket_name, chunks_obj, jsonl_bytes, content_type="application/jsonl; charset=utf-8")
+
+        manifest = {"chunk_count": len(chunks), "params_hash": params_hash, "input_fingerprint": clean_fingerprint}
+        manifest_obj = f"processed/{tenant_id}/{kb_id}/{doc_id}/chunks_v1/{clean_fingerprint}_{params_hash}.manifest.json"
+        _gcs_upload_bytes(gcs, bucket_name, manifest_obj, json.dumps(manifest).encode("utf-8"), content_type="application/json; charset=utf-8")
+
+        # Store chunks in DB
+        with _supabase_conn(settings) as conn:
+            with conn.cursor() as cur:
+                for row in chunk_rows:
+                    cur.execute(
+                        """
+                        INSERT INTO public.chunks
+                            (chunk_id, tenant_id, kb_id, doc_id, chunk_index, section_path,
+                             start_char, end_char, chunk_fingerprint, chunk_chars,
+                             params_hash, input_fingerprint, input_kind,
+                             gcs_chunks_uri, gcs_manifest_uri, created_at)
+                        VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                        ON CONFLICT (tenant_id, kb_id, doc_id, params_hash, input_fingerprint, chunk_index) DO NOTHING
+                        """,
+                        (row["chunk_id"], tenant_id, kb_id, doc_id, row["chunk_index"],
+                         row["section_path"], row["start_char"], row["end_char"],
+                         row["chunk_fingerprint"], len(row["text"]),
+                         params_hash, clean_fingerprint, "clean_v1",
+                         gcs_chunks_uri, manifest_obj),
+                    )
+            conn.commit()
+        pipeline_stats["chunked"] = True
+        pipeline_stats["chunk_count"] = len(chunks)
+    except Exception as e:
+        logger.warning("auto_pipeline chunk failed for doc_id=%s: %s", doc_id, str(e)[:200])
+        pipeline_stats["chunk_error"] = str(e)[:200]
+        return pipeline_stats
+
+    # ── 3. Embed ──
+    try:
+        api_key = None
+        for attr in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            val = getattr(settings, attr, None) or os.getenv(attr)
+            if val:
+                api_key = val
+                break
+        if not api_key:
+            pipeline_stats["embed_skipped"] = "no_gemini_api_key"
+            return pipeline_stats
+
+        import google.generativeai as genai
+        from app.api.embed import _embed_batch
+        from psycopg2.extras import execute_values
+
+        genai.configure(api_key=api_key)
+        embedding_model = "models/gemini-embedding-001"
+        dim = 1536
+        batch_size = 32
+
+        chunk_texts = [r["text"] for r in chunk_rows]
+        all_vectors: List[List[float]] = []
+        for b_start in range(0, len(chunk_texts), batch_size):
+            batch = chunk_texts[b_start:b_start + batch_size]
+            vecs = _embed_batch(model=embedding_model, texts=batch, output_dimensionality=dim)
+            all_vectors.extend(vecs)
+
+        if len(all_vectors) != len(chunk_rows):
+            pipeline_stats["embed_error"] = f"vector count mismatch: {len(all_vectors)} vs {len(chunk_rows)}"
+            return pipeline_stats
+
+        chunks_fp = _sha256_text(clean_fingerprint + params_hash)
+        embed_params_hash = _sha256_text(f"{embedding_model}:{dim}")
+
+        def _to_pg_vector(vec: List[float]) -> str:
+            return "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
+
+        db_rows = []
+        for row, vec in zip(chunk_rows, all_vectors):
+            db_rows.append((
+                tenant_id, kb_id, doc_id, row["chunk_id"],
+                _to_pg_vector(vec), embedding_model, dim,
+                chunks_fp, embed_params_hash,
+            ))
+
+        with _supabase_conn(settings) as conn:
+            with conn.cursor() as cur:
+                sql = """
+                INSERT INTO public.chunk_embeddings (
+                    tenant_id, kb_id, doc_id, chunk_id,
+                    embedding, embedding_model, output_dimensionality,
+                    chunks_fingerprint, params_hash
+                ) VALUES %s
+                ON CONFLICT (tenant_id, kb_id, doc_id, chunk_id)
+                DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    embedding_model = EXCLUDED.embedding_model,
+                    output_dimensionality = EXCLUDED.output_dimensionality,
+                    chunks_fingerprint = EXCLUDED.chunks_fingerprint,
+                    params_hash = EXCLUDED.params_hash,
+                    created_at = now()
+                """
+                template = "(%s::uuid,%s::uuid,%s::uuid,%s,%s::vector,%s,%s,%s,%s)"
+                execute_values(cur, sql, db_rows, template=template, page_size=200)
+            conn.commit()
+        pipeline_stats["embedded"] = True
+        pipeline_stats["embedded_count"] = len(db_rows)
+    except Exception as e:
+        logger.warning("auto_pipeline embed failed for doc_id=%s: %s", doc_id, str(e)[:200])
+        pipeline_stats["embed_error"] = str(e)[:200]
+
+    return pipeline_stats
 
 
 def _crawl_and_ingest(job: CrawlJob) -> Dict[str, Any]:
@@ -1298,6 +1667,27 @@ def _crawl_and_ingest(job: CrawlJob) -> Dict[str, Any]:
 
                     _log_job_event(conn, job.tenant_id, None, job.job_id, "page_extracted", {"url": final_url, "doc_id": doc_id, "extracted_chars": extracted_chars, "method": extract_method})
                     stats["pages_extracted"] += 1
+
+                    # ── Auto-pipeline: preprocess → chunk → embed ──
+                    if job.config.auto_pipeline and extracted_text:
+                        try:
+                            pipe_result = _auto_pipeline_page(
+                                doc_id=doc_id,
+                                tenant_id=job.tenant_id,
+                                kb_id=job.kb_id,
+                                extracted_text=extracted_text,
+                                text_fingerprint=text_fingerprint or "",
+                                gcs=gcs,
+                                bucket_name=bucket_name,
+                                settings=settings,
+                            )
+                            _log_job_event(conn, job.tenant_id, None, job.job_id, "auto_pipeline_done", {"doc_id": doc_id, "result": pipe_result})
+                            stats.setdefault("pages_pipelined", 0)
+                            if pipe_result.get("embedded"):
+                                stats["pages_pipelined"] += 1
+                        except Exception as e:
+                            logger.warning("auto_pipeline error doc_id=%s: %s", doc_id, str(e)[:200])
+
                 except psycopg2.Error as e:
                     _log_job_event(conn, job.tenant_id, None, job.job_id, "db_insert_error", {"url": final_url, "error": str(e).split("\n")[0]})
                     stats["errors"] += 1

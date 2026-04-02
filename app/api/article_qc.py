@@ -330,7 +330,7 @@ def get_qc_report(
     # plan thresholds (including new quality checks)
     thresholds = {
         "word_count_min": 1900,
-        "word_count_max": 2600,
+        "word_count_max": 2500,
         "fk_grade_min": 5.0,
         "fk_grade_max": 12.0,
         "flesch_reading_ease_min": 70.0,  # FRE > 70 = easy to read (humanoid style)

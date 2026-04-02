@@ -16,6 +16,7 @@ requests
 beautifulsoup4
 lxml
 readability-lxml
+trafilatura
 
 # File parsing (PDF/DOCX/HTML)
 pypdf
