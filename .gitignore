@@ -41,6 +41,7 @@ draft_info.json
 gpt52_draft.md
 check_draft.py
 check_crawl.py
+check_analysis.py
 clear_qc*.py
 clear_qc_temp.py
 fetch_draft.py

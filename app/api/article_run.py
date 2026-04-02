@@ -31,9 +31,11 @@ OPENAI_DEFAULT_MODEL = "gpt-5.2-2025-12-11"
 # Cached system prompt — identical for every article, enables
 # OpenAI prompt caching (50% savings on input tokens after 1st call)
 # ============================================================
-SYSTEM_PROMPT = """You are a real human blogger. Not an AI. Not a copywriter. A real person who's done research on a topic and is sharing what they found — in their own messy, casual, honest voice.
-
-HOW REAL HUMANS WRITE (do ALL of these):
+# ============================================================
+# Layer 1: HUMANIZATION CORE — NEVER changes. This is what got
+# ZeroGPT from 77.5% → 10%. Locked across ALL articles.
+# ============================================================
+HUMANIZATION_CORE = """HOW REAL HUMANS WRITE (do ALL of these — these rules OVERRIDE everything):
 
 BURSTINESS — wildly vary your sentence length:
 - Some sentences are 3 words. "That's the point."
@@ -63,7 +65,7 @@ CONVERSATIONAL TEXTURE — sound like you're talking:
 STRUCTURE — break the AI pattern:
 - Paragraphs are 1-4 lines. Some are just one line.
 - Use bullet lists but keep them casual, not corporate
-- Headings can be playful: "Why Sleep Matters (More Than You Think)"
+- Headings can be playful — not boring corporate headings
 - Don't wrap up sections with neat summary sentences. Just move on.
 
 BANNED — these words/phrases scream "AI wrote this":
@@ -80,6 +82,140 @@ SELF-CHECK after each section:
 - Count sentence lengths. If 3+ sentences in a row are similar length, vary them.
 - Would you actually say this to a friend? If not, make it more casual.
 - Did you start any sentence with "This" or "These" or "It is"? Rewrite those."""
+
+
+# ============================================================
+# Phase 1: Analyze source material (~500 tokens)
+# Returns tone, complexity, content_type, audience_familiarity
+# Fully generalized — no domain-specific logic
+# ============================================================
+def _analyze_source(
+    client: OpenAI,
+    model: str,
+    sources_block: str,
+    *,
+    temperature: float = 0.3,
+) -> Tuple[Dict[str, str], Dict[str, int]]:
+    """Cheap GPT call to classify source material tone/complexity/type."""
+    analysis_prompt = """Read these source excerpts and classify the content.
+Return ONLY this JSON — no explanation, no markdown, no preamble:
+
+{
+  "tone": "casual" or "professional" or "academic" or "conversational" or "journalistic",
+  "complexity": "beginner" or "intermediate" or "expert",
+  "content_type": "news" or "analysis" or "tutorial" or "opinion" or "explainer" or "report",
+  "audience_familiarity": "new_to_topic" or "knows_basics" or "domain_expert",
+  "voice_hint": "one sentence — who would naturally write about this topic"
+}
+
+SOURCE EXCERPTS:
+""" + sources_block[:3000]  # cap to save tokens
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You analyze text and return JSON. Nothing else."},
+                {"role": "user", "content": analysis_prompt},
+            ],
+            temperature=temperature,
+            max_completion_tokens=256,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        # Parse JSON — handle markdown code blocks
+        raw = re.sub(r"^```json\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        analysis = json.loads(raw)
+        u = resp.usage
+        usage = {
+            "prompt_tokens": u.prompt_tokens if u else 0,
+            "output_tokens": u.completion_tokens if u else 0,
+            "total_tokens": u.total_tokens if u else 0,
+        }
+        return analysis, usage
+    except Exception:
+        # If analysis fails, return safe defaults — never block article generation
+        return {
+            "tone": "professional",
+            "complexity": "intermediate",
+            "content_type": "explainer",
+            "audience_familiarity": "knows_basics",
+            "voice_hint": "someone knowledgeable sharing what they found",
+        }, {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+# ============================================================
+# Phase 2: Build dynamic system prompt from analysis
+# Layer 1 (humanization) is LOCKED — Layer 2 (voice) adapts
+# ============================================================
+_TONE_MAP = {
+    "casual":         "Write like you're texting a smart friend about this topic.",
+    "professional":   "Clear, confident, knowledgeable — but not corporate or stiff.",
+    "academic":       "Structured and evidence-based, but still readable — not a textbook.",
+    "conversational": "Like you're explaining this over lunch to someone genuinely curious.",
+    "journalistic":   "Lead with the headline, report facts, keep it tight and engaging.",
+}
+
+_COMPLEXITY_MAP = {
+    "beginner":      "Assume the reader is new to this. Define terms naturally when you use them.",
+    "intermediate":  "Reader knows the basics. Use domain terms but keep it accessible.",
+    "expert":        "Reader is familiar with the field. Use proper terminology. Skip the 101 stuff.",
+}
+
+_CONTENT_TYPE_MAP = {
+    "news":      "Lead with the biggest moment. Short paragraphs. What happened, why it matters.",
+    "analysis":  "State the thesis early. Build evidence. Draw conclusions.",
+    "tutorial":  "Problem → steps → result. Numbered lists. Make it actionable.",
+    "opinion":   "Hot take first. Support with facts. Acknowledge counterpoints.",
+    "explainer": "What → why → how. Use analogies. Build from simple to complex.",
+    "report":    "Summary → findings → implications. Use clear subheadings.",
+}
+
+_AUDIENCE_MAP = {
+    "new_to_topic":   "Your reader just discovered this topic. Start from scratch, no assumptions.",
+    "knows_basics":   "Your reader follows this area casually. Skip the obvious stuff.",
+    "domain_expert":  "Your reader is deep in this. Get to the insights fast.",
+}
+
+
+def _build_dynamic_prompt(analysis: Dict[str, str]) -> str:
+    """
+    Assemble system prompt: LOCKED humanization core + DYNAMIC voice layer.
+    The voice layer can NEVER override the humanization rules.
+    """
+    tone = analysis.get("tone", "professional")
+    complexity = analysis.get("complexity", "intermediate")
+    content_type = analysis.get("content_type", "explainer")
+    audience_fam = analysis.get("audience_familiarity", "knows_basics")
+    voice_hint = analysis.get("voice_hint", "someone knowledgeable sharing what they found")
+
+    voice_section = f"""
+VOICE FOR THIS ARTICLE (adapt your subject matter knowledge, NOT your writing style):
+You are {voice_hint}. You've done the research and you're sharing what you found.
+Tone: {_TONE_MAP.get(tone, _TONE_MAP["professional"])}
+Vocabulary: {_COMPLEXITY_MAP.get(complexity, _COMPLEXITY_MAP["intermediate"])}
+Structure: {_CONTENT_TYPE_MAP.get(content_type, _CONTENT_TYPE_MAP["explainer"])}
+Reader: {_AUDIENCE_MAP.get(audience_fam, _AUDIENCE_MAP["knows_basics"])}
+
+AUDIENCE: 16-32 year olds. They're smart, they scroll fast, they'll bounce if bored.
+Be professional but not corporate. Be interesting but not clickbait.
+
+CRITICAL: The humanization rules above ALWAYS override voice instructions.
+Even with a professional tone, you STILL use fragments, dashes, personal opinions,
+varied sentence lengths, and all the anti-AI patterns listed above. The voice just
+tells you WHAT you're writing about — not HOW to write."""
+
+    return HUMANIZATION_CORE + "\n" + voice_section
+
+
+# Keep backward compatibility — static prompt for fallback / Groq path
+SYSTEM_PROMPT = _build_dynamic_prompt({
+    "tone": "professional",
+    "complexity": "intermediate",
+    "content_type": "explainer",
+    "audience_familiarity": "knows_basics",
+    "voice_hint": "someone knowledgeable sharing what they found",
+})
 
 
 # ============================================================
@@ -625,9 +761,11 @@ def _generate_outline_openai(
     keywords: List[str],
     sources_block: str,
     *,
+    system_prompt: str = "",
     temperature: float = 0.7,
 ) -> Tuple[str, Dict[str, int]]:
     """Call 1: Generate a structured outline (~900 tokens). Cheap planning step."""
+    sys_prompt = system_prompt or SYSTEM_PROMPT
     kw = ", ".join(keywords or [])
     outline_prompt = f"""I'm writing a blog post about "{title}" and I need to plan it out.
 Keywords to hit: {kw}
@@ -640,15 +778,15 @@ For each section, give me:
 
 Here's my structure — 8 sections:
 1. Hook intro (80-100 words) — start with a question, a bold statement, or a mini-story. NO "in today's world" nonsense.
-2. The basics — what is {title}? (150-180 words) — explain it like I'm telling my friend at a coffee shop
+2. The basics — what is {title}? (150-180 words) — explain like you're telling a friend
 3. Why anyone should care (150-180 words) — real impact, real people, not abstract fluff
 4. How it actually works (200-230 words) — walk through it step by step, keep it dead simple
 5. Real stories / examples (200-230 words) — 2-3 concrete, relatable examples
-6. Mistakes people make (100-130 words) — common traps, things I've seen go wrong
-7. FAQ section (120-150 words) — 5-8 quick Q&As, super casual answers
+6. Mistakes people make (100-130 words) — common traps, things that go wrong
+7. FAQ section (120-150 words) — 5-8 quick Q&As, casual short answers
 8. Wrap up / takeaways (80-100 words) — bullet summary, keep it punchy
 
-HARD LIMIT: 1400-1600 words. You MUST stop at 1600 words. Count as you write.
+HARD LIMIT: 1600-1800 words. You MUST stop at 1800 words. Count as you write.
 
 SOURCES (use these for facts):
 {sources_block}
@@ -658,7 +796,7 @@ Give me the outline as markdown with ## headings and bullets."""
     resp = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": outline_prompt},
         ],
         temperature=temperature,
@@ -682,12 +820,14 @@ def _generate_draft_openai(
     outline: str,
     sources_block: str,
     *,
+    system_prompt: str = "",
     temperature: float = 0.7,
     max_tokens: int = 8192,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
-    """Call 2: Generate the full 2000-word article guided by the outline (~6000 tokens)."""
+    """Call 2: Generate the full article guided by the outline."""
+    sys_prompt = system_prompt or SYSTEM_PROMPT
     kw = ", ".join(keywords or [])
-    draft_prompt = f"""Okay, write the full blog post on "{title}" based on this outline.
+    draft_prompt = f"""Write the full blog post on "{title}" based on this outline.
 Keywords: {kw}
 
 OUTLINE:
@@ -695,38 +835,27 @@ OUTLINE:
 
 RULES — read these carefully:
 - Follow the outline section by section. Hit every section's word count.
-- HARD LIMIT: 1400-1600 words. You MUST stop at 1600 words. Count as you write.
+- HARD LIMIT: 1600-1800 words. You MUST stop at 1800 words. Count as you write.
 - Each section = new info. If you already said it, don't say it again.
 - FAQ: 5-8 questions, casual short answers.
 - Use the sources for facts. Don't make stuff up. If sources don't cover something, just say "I couldn't find solid info on this" and move on.
 
-STYLE — this is the most important part. Write EXACTLY like this example:
+STYLE — notice what makes this example feel human:
 
 ---
-## Okay So What Even Is Cloud Computing?
+You ever look at something and think "wait, that can't be right"? That happened to me researching this topic. The numbers don't lie — but they definitely surprise you.
 
-You ever watch Netflix on your phone and then switch to your TV and it just... picks up where you left off? That's cloud computing doing its thing. Your show isn't saved on your phone — it lives on some massive computer in a warehouse somewhere. Probably Oregon. Or Ireland. Who knows.
+Here's how I think about it. You know how sometimes you learn something and it changes how you see everything? That's what happened here. And honestly, I wish someone had explained it to me this way years ago.
 
-Here's how I think about it. You know how libraries work? You don't buy every single book. You just borrow what you need and return it when you're done. Cloud computing is basically that — but for computer stuff.
-
-So the simple version? You're using someone else's really powerful computers through the internet. That's it. That's the whole concept.
-
-### Why Should You Even Care?
-
-Okay so here's where it gets good. Think about your phone photos. I've got like 12,000 on mine (don't judge me). Eventually you run out of space. It happens to everyone.
-
-But with cloud storage — which is just one flavor of cloud computing — your photos live online. You can pull them up from any device. Your phone could fall in a lake tomorrow and your photos would be fine.
-
-Honestly? That alone makes it worth understanding.
+So the simple version? It's not as complicated as people make it sound. That's the whole point.
 ---
 
-Notice what makes that feel human:
+Why that works:
 - Sentence lengths go from 3 words to 25 words — randomly
-- Starts sentences with "So", "But", "Okay", "And", "Honestly?"
-- Has opinions: "don't judge me", "that alone makes it worth it"
+- Starts sentences with "So", "But", "And", "Honestly?"
+- Has opinions and personal reactions
 - Uses dashes, ellipses, fragments
 - Doesn't wrap up sections neatly — just moves on
-- Feels like someone talking, not writing an essay
 
 SOURCES:
 {sources_block}
@@ -736,7 +865,7 @@ Write the full article now. Markdown only — no intro text, no "here's the arti
     resp = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},  # CACHE HIT from outline call
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": draft_prompt},
         ],
         temperature=temperature,
@@ -1014,6 +1143,16 @@ def run_article_request(
         client = OpenAI(api_key=openai_api_key)
         model_used = req.draft_model or os.getenv("OPENAI_MODEL", OPENAI_DEFAULT_MODEL)
 
+        # Phase 1: Analyze source material (cheap ~500 tokens)
+        analysis, analysis_usage = _analyze_source(
+            client=client,
+            model=model_used,
+            sources_block=sources_block,
+        )
+
+        # Phase 2: Build dynamic system prompt (0 tokens — code logic)
+        dynamic_prompt = _build_dynamic_prompt(analysis)
+
         # Call 1: Outline (cheap, ~900 tokens)
         outline, outline_usage = _generate_outline_openai(
             client=client,
@@ -1021,10 +1160,11 @@ def run_article_request(
             title=title,
             keywords=keywords,
             sources_block=sources_block,
+            system_prompt=dynamic_prompt,
             temperature=float(req.temperature),
         )
 
-        # Call 2: Full draft guided by outline (~6000 tokens)
+        # Call 2: Full draft guided by outline
         draft_json, draft_usage = _generate_draft_openai(
             client=client,
             model=model_used,
@@ -1032,15 +1172,19 @@ def run_article_request(
             keywords=keywords,
             outline=outline,
             sources_block=sources_block,
+            system_prompt=dynamic_prompt,
             temperature=float(req.temperature),
             max_tokens=int(req.max_output_tokens),
         )
 
-        # Combine usage from both calls
+        # Store analysis in draft for auditing
+        draft_json["source_analysis"] = analysis
+
+        # Combine usage from all calls
         usage = {
-            "prompt_tokens": outline_usage["prompt_tokens"] + draft_usage["prompt_tokens"],
-            "output_tokens": outline_usage["output_tokens"] + draft_usage["output_tokens"],
-            "total_tokens": outline_usage["total_tokens"] + draft_usage["total_tokens"],
+            "prompt_tokens": analysis_usage["prompt_tokens"] + outline_usage["prompt_tokens"] + draft_usage["prompt_tokens"],
+            "output_tokens": analysis_usage["output_tokens"] + outline_usage["output_tokens"] + draft_usage["output_tokens"],
+            "total_tokens": analysis_usage["total_tokens"] + outline_usage["total_tokens"] + draft_usage["total_tokens"],
         }
 
     elif provider == "groq":
