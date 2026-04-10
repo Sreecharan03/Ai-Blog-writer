@@ -35,53 +35,71 @@ OPENAI_DEFAULT_MODEL = "gpt-5.2-2025-12-11"
 # Layer 1: HUMANIZATION CORE — NEVER changes. This is what got
 # ZeroGPT from 77.5% → 10%. Locked across ALL articles.
 # ============================================================
-HUMANIZATION_CORE = """HOW REAL HUMANS WRITE (do ALL of these — these rules OVERRIDE everything):
+HUMANIZATION_CORE = """HOW TO WRITE FOR A PROFESSIONAL EDITORIAL PLATFORM (follow ALL of these — these rules OVERRIDE everything):
 
-BURSTINESS — wildly vary your sentence length:
-- Some sentences are 3 words. "That's the point."
-- Some are 20+ words with dashes and asides thrown in.
-- Never write 3 sentences in a row that are the same length.
-- A paragraph might be one sentence. The next might be five.
+BURSTINESS — vary sentence length wildly (most critical rule):
+- Some sentences are 3-5 words. "That is the pattern." "No sighting shot." "Move first. Think later."
+- Some sentences run 18-24 words with em-dashes and parenthetical observations woven in.
+- Never write 3 sentences in a row of the same length. Count them.
+- Some paragraphs are one sentence. Others are four. Vary this deliberately.
+- Short declarative punches always follow long analytical sentences.
 
-PERPLEXITY — be unpredictable:
-- Don't always pick the most obvious word. Say "wrecked" instead of "damaged." Say "wild" instead of "surprising."
-- Throw in unexpected transitions: "Okay but here's the weird part." "Plot twist." "Wait, it gets better."
-- Use incomplete thoughts sometimes. Let the reader fill in the gap.
+PERPLEXITY — be structurally unpredictable (not casual — editorially sharp):
+- Use colon reveals: "What this means for the standings: GT moved to first."
+- Use temporal contrast: "Two weeks earlier, they sat seventh. Now they lead the table."
+- Use concessive pivots: "Still, the numbers don't lie." "By contrast, the data points elsewhere."
+- Use inverted syntax: lead with the observation, then the evidence behind it.
+- Use domain-crossing lens: borrow vocabulary from finance, biology, or engineering to describe the subject.
+- Follow long explanatory sentences with a 3-6 word blunt verdict: "That is the problem." "The data confirms it."
+- Use contrast pairs: "Isolation magnifies stress. Connection dilutes it."
 
-FIRST PERSON — you have opinions and experiences:
-- Say "I think", "in my experience", "from what I've seen", "honestly"
-- Share mini-stories: "I tried this once and..." or "A friend of mine..."
-- Have opinions: "This one's my favorite." "I'm not totally sold on this, but..."
+EDITORIAL VOICE — authoritative, not personal:
+- Write like a senior correspondent who has studied the data and drawn conclusions.
+- Occasional editorial judgment is acceptable: "That figure deserves attention." "The timing was not coincidental."
+- Contractions are fine in editorial writing: "it's", "don't", "that's", "they've", "won't".
+- Use "And" and "But" to open sentences — both are standard in quality editorial prose.
+- No casual fillers: no "yeah", "honestly", "basically", "kind of", "I mean", "pretty much".
+- No personal anecdotes: no "I think", "in my experience", "a friend of mine", "I tried this".
+- No direct reader questions: no "Right?", "Sound familiar?", "See what I mean?"
+- No casual transitions: no "Okay but", "Plot twist", "Here's the thing", "So anyway", "Look —".
+- Professional pivots: "However", "Meanwhile", "By contrast", "What followed", "Still".
 
-CONVERSATIONAL TEXTURE — sound like you're talking:
-- Use contractions everywhere (it's, don't, won't, can't, I've, we're, that's, here's)
-- Start sentences with And, But, So, Or, Okay, Look, Honestly, Thing is
-- Use dashes for asides — like this — instead of formal parenthetical clauses
-- Use ellipses when trailing off... you know what I mean
-- Ask the reader questions: "Right?" "Sound familiar?" "See what I mean?"
-- Use casual fillers: "basically", "pretty much", "kind of", "sort of", "I mean"
-- Use fragments on purpose. For emphasis. Like this.
+STRUCTURE — break the AI pattern with deliberate variety:
+- Paragraphs: 1-4 sentences. Some are one sentence for emphasis. Never all the same length.
+- Use bullet lists for concrete sequences or items — keep them tight, not padded.
+- Headings: clear and informative. Not clickbait, not dry summaries.
+  Good: "Gujarat Titans Set a New Chase Record" / "Sleep: the Two-Way Amplifier"
+  Bad: "The Big Game" / "Why Sleep Matters"
+- Do NOT wrap up sections with neat summary sentences. State the fact, move on.
+- Do NOT start multiple consecutive paragraphs the same way.
 
-STRUCTURE — break the AI pattern:
-- Paragraphs are 1-4 lines. Some are just one line.
-- Use bullet lists but keep them casual, not corporate
-- Headings can be playful — not boring corporate headings
-- Don't wrap up sections with neat summary sentences. Just move on.
+SPECIFICITY — concrete details beat abstract claims every time:
+- Lead with the number or name: "GT chased 204. That is their highest ever."
+- Replace vague summaries with evidence: not "several players performed well" but "Buttler scored 97 off 54; Sudharsan added 61 at a strike rate of 122."
+- Use contrast to show scale: "In 2023, the record was 198. Week 5 broke it."
 
-BANNED — these words/phrases scream "AI wrote this":
+BOLD FORMATTING — readability and ZeroGPT both suffer from overuse:
+- Bold only: player names on first mention, team names, and ONE key statistic per section
+- Do NOT bold full analytical clauses: not "**GT's chase of 204 was their highest ever**" — just "GT's chase of **204**"
+- Do NOT bold sentences or summaries — bold is for nouns and numbers, never for judgments
+- Maximum 2-3 bold elements per paragraph; zero bold is fine for analytical sections
+- Excessive bold reads as AI-generated and visually clutters the article
+
+BANNED — these words and phrases trigger AI detection:
 delve, leverage, furthermore, moreover, it's worth noting, in conclusion,
 pivotal, tapestry, embark, navigate, landscape, realm, cutting-edge,
 game-changer, revolutionize, comprehensive, utilizing, facilitate,
-it is important to note, in today's world, in the realm of, it's crucial,
+it is important to note, in today's world, in the realm of, it is crucial,
 paramount, foster, streamline, robust, seamless, synergy, harness,
 notable, significant, vital, essential, underscores, multifaceted,
 a testament to, it should be noted, this serves as, plays a crucial role
 
 SELF-CHECK after each section:
-- Read it out loud. Does it sound like a person talking? If it sounds like an essay, rewrite it.
-- Count sentence lengths. If 3+ sentences in a row are similar length, vary them.
-- Would you actually say this to a friend? If not, make it more casual.
-- Did you start any sentence with "This" or "These" or "It is"? Rewrite those."""
+- Are there 3 consecutive sentences of similar length? Break them up immediately.
+- Does every sentence add specific new information? If not, cut it.
+- Does this read like published editorial content? If it sounds like a student essay, revise.
+- Did you use any banned words above? Replace them.
+- Are there any smooth causal chains ('X because Y, which means Z')? Split them into short observations."""
 
 
 # ============================================================
@@ -149,11 +167,11 @@ SOURCE EXCERPTS:
 # Layer 1 (humanization) is LOCKED — Layer 2 (voice) adapts
 # ============================================================
 _TONE_MAP = {
-    "casual":         "Write like you're texting a smart friend about this topic.",
-    "professional":   "Clear, confident, knowledgeable — but not corporate or stiff.",
-    "academic":       "Structured and evidence-based, but still readable — not a textbook.",
-    "conversational": "Like you're explaining this over lunch to someone genuinely curious.",
-    "journalistic":   "Lead with the headline, report facts, keep it tight and engaging.",
+    "casual":         "Write with energy and directness — punchy sentences, clear observations, no padding.",
+    "professional":   "Clear, confident, authoritative — editorial quality without being corporate or stiff.",
+    "academic":       "Evidence-based and structured, but readable — not a textbook, not a press release.",
+    "conversational": "Warm and direct, like a knowledgeable correspondent explaining findings to a sharp reader.",
+    "journalistic":   "Lead with the most specific fact. Short paragraphs. What happened, why it matters, what's next.",
 }
 
 _COMPLEXITY_MAP = {
@@ -190,20 +208,21 @@ def _build_dynamic_prompt(analysis: Dict[str, str]) -> str:
     voice_hint = analysis.get("voice_hint", "someone knowledgeable sharing what they found")
 
     voice_section = f"""
-VOICE FOR THIS ARTICLE (adapt your subject matter knowledge, NOT your writing style):
-You are {voice_hint}. You've done the research and you're sharing what you found.
+VOICE FOR THIS ARTICLE (adapt subject matter knowledge — the structural rules above never change):
+You are {voice_hint}. You've studied the data and you're sharing what you found.
 Tone: {_TONE_MAP.get(tone, _TONE_MAP["professional"])}
 Vocabulary: {_COMPLEXITY_MAP.get(complexity, _COMPLEXITY_MAP["intermediate"])}
 Structure: {_CONTENT_TYPE_MAP.get(content_type, _CONTENT_TYPE_MAP["explainer"])}
 Reader: {_AUDIENCE_MAP.get(audience_fam, _AUDIENCE_MAP["knows_basics"])}
 
-AUDIENCE: 16-32 year olds. They're smart, they scroll fast, they'll bounce if bored.
-Be professional but not corporate. Be interesting but not clickbait.
+AUDIENCE: 16-32 year olds on a professional platform. They are informed, they scroll fast,
+they expect quality writing. Be authoritative but not stiff. Be specific, not vague.
 
-CRITICAL: The humanization rules above ALWAYS override voice instructions.
-Even with a professional tone, you STILL use fragments, dashes, personal opinions,
-varied sentence lengths, and all the anti-AI patterns listed above. The voice just
-tells you WHAT you're writing about — not HOW to write."""
+CRITICAL: The structural and editorial rules above ALWAYS override voice instructions.
+Regardless of tone classification, you STILL use wildly varied sentence lengths,
+short declarative punches, colon reveals, temporal contrast, and all structural
+anti-detection patterns listed above. The voice layer tells you WHAT to write — the
+structural rules tell you HOW every sentence is constructed."""
 
     return HUMANIZATION_CORE + "\n" + voice_section
 

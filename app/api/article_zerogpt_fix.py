@@ -402,19 +402,63 @@ def _build_humanize_prompts(
     Returns (system_prompt, user_prompt).
     Uses surgical mode when ai_sentences is non-empty,
     falls back to full-doc rewrite when empty.
+
+    Professional editorial mode: reduces AI detection by targeting
+    token-level predictability — not by adding casual language.
     """
     system_prompt = (
-        "You are rewriting sentences to beat AI detection. The KEY things AI detectors look for:\n"
-        "1. UNIFORM SENTENCE LENGTH — AI writes sentences that are all roughly the same length. "
-        "Humans don't. Mix wildly: 3 words, then 22 words, then 8 words.\n"
-        "2. PREDICTABLE WORD CHOICES — AI picks the 'safest' word. Humans pick weird, unexpected words. "
-        "Say 'wrecked' not 'damaged'. Say 'honestly' not 'in fact'. Say 'wild' not 'surprising'.\n"
-        "3. SMOOTH TRANSITIONS — AI connects everything perfectly. Humans jump around. "
-        "Use 'Okay but', 'So anyway', 'Here's the thing', 'Plot twist'.\n"
-        "4. NO PERSONAL VOICE — AI never says 'I think' or 'in my experience'. Add these everywhere.\n"
-        "5. PERFECT GRAMMAR — Humans use fragments. On purpose. Like this. Start with 'And' or 'But'.\n\n"
-        "Your job: rewrite flagged text so it has HIGH BURSTINESS (varied sentence lengths) "
-        "and HIGH PERPLEXITY (unexpected word choices). Make it sound like a real blogger.\n"
+        "You are a professional editorial rewriter. Your task: reduce AI detection scores "
+        "while preserving professional tone throughout.\n\n"
+        "HOW AI DETECTION WORKS — understand this to fix sentences correctly:\n"
+        "ZeroGPT measures TOKEN-LEVEL PREDICTABILITY. It flags sentences where every word is "
+        "exactly what a language model expects to produce next. A sentence like 'The policy has "
+        "been consistently linked to improved outcomes across all measured categories' scores high "
+        "because every token is the obvious continuation. A sentence like 'The policy changed one "
+        "thing. Outcomes followed. The data confirmed it.' scores low because the split and "
+        "abruptness are unexpected.\n\n"
+        "PROFESSIONAL PERPLEXITY TECHNIQUES — these reduce detection without casual language:\n\n"
+        "1. SENTENCE SPLITTING — break one smooth long sentence into 2-3 short declaratives:\n"
+        "   FLAGGED: 'The team's batting lineup has been consistently strong throughout the season due to depth.'\n"
+        "   FIXED:   'The batting lineup has depth. Three players averaging above 40. That cushion changes chase dynamics.'\n\n"
+        "2. NEGATION CHAIN — state what something is NOT before what it IS:\n"
+        "   FLAGGED: 'Cloud computing offers cost savings and operational flexibility for small businesses.'\n"
+        "   FIXED:   'Not a guarantee. Not a one-size outcome. A structural advantage — when implemented deliberately.'\n\n"
+        "3. INVERTED COLON REVEAL — setup first, specific finding after the colon:\n"
+        "   FLAGGED: 'Social connection significantly reduces stress and improves mental health outcomes.'\n"
+        "   FIXED:   'What social connection actually changes: not just mood — baseline physiological arousal.'\n\n"
+        "4. TEMPORAL CONTRAST — anchor abstract claims to specific time points:\n"
+        "   FLAGGED: 'Hybrid cloud adoption has been growing steadily among organizations of all sizes.'\n"
+        "   FIXED:   'In 2024, hybrid cloud adoption was measured at a modest baseline. By end of 2025, it had risen 35%.'\n\n"
+        "5. CONCESSIVE PIVOT — acknowledge the expected view, then turn:\n"
+        "   FLAGGED: 'Despite security concerns, businesses continue to adopt cloud services at a rapid rate.'\n"
+        "   FIXED:   'Security concerns are legitimate. Still, aging hardware and single points of failure carry their own risk register.'\n\n"
+        "6. SHORT BLUNT VERDICT — follow long analysis with a 3-6 word observation:\n"
+        "   FLAGGED: 'This bidirectional relationship between sleep deprivation and stress reactivity creates a compounding negative cycle.'\n"
+        "   FIXED:   'Stress damages sleep. Poor sleep sharpens stress the next day. The loop feeds itself.'\n\n"
+        "7. EM-DASH INTERRUPTION — insert a specific observation mid-sentence:\n"
+        "   FLAGGED: 'Cortisol and adrenaline are stress hormones that can negatively affect health when chronically elevated.'\n"
+        "   FIXED:   'Cortisol and adrenaline — the body's primary threat chemicals — become corrosive when they stay elevated for weeks.'\n\n"
+        "8. CONTRAST PAIR — two short sentences where the second inverts or sharpens the first:\n"
+        "   FLAGGED: 'Smaller teams tend to struggle more while larger teams with more resources typically perform better.'\n"
+        "   FIXED:   'Resources don't guarantee outcomes. Smaller teams often move faster.'\n\n"
+        "PROFESSIONAL STANDARDS — never compromise these:\n"
+        "- No casual slang: no 'yeah', 'honestly', 'basically', 'kind of', 'I mean', 'plot twist'\n"
+        "- No personal anecdotes: no 'I think', 'in my experience', 'a friend told me'\n"
+        "- No reader questions: no 'Right?', 'Sound familiar?', 'See what I mean?'\n"
+        "- No casual transitions: no 'Okay but', 'Here's the thing', 'So anyway', 'Look'\n"
+        "- Professional pivots only: 'However', 'Meanwhile', 'By contrast', 'Still', 'What followed'\n"
+        "- Contractions are fine in editorial writing: 'it's', 'don't', 'that's', 'they've'\n\n"
+        "ABSOLUTE OUTPUT RULES — violations break the article:\n"
+        "- NEVER write technique labels in the output text. Labels like 'Concessive pivot:', "
+        "'Negation chain:', 'Contrast pair:' are for your reference ONLY. They must NEVER appear "
+        "in the article. Apply each technique invisibly — the reader should never see a label.\n"
+        "- NEVER reproduce example sentences verbatim. The examples above illustrate technique "
+        "structure only. Do not copy them word-for-word into the article.\n"
+        "- NEVER use first-person source references. Remove any 'I couldn't find...', "
+        "'The sources suggest...', 'Based on the provided data...' — replace with neutral "
+        "editorial phrasing ('Granular breakdowns were not available') or remove entirely.\n\n"
+        "CRITICAL RULE: Do NOT add words. Every rewrite must use the SAME OR FEWER words. "
+        "Restructure and reorder — never expand.\n\n"
         "Output ONLY the complete article in markdown. No preamble, no explanation."
     )
 
@@ -427,18 +471,19 @@ def _build_humanize_prompts(
         "crucial, essential, vital, significant, notable, remarkable"
     )
 
-    # Vary techniques by attempt to avoid repetitive rewrites
+    # Professional structural techniques — rotate per attempt for variety
+    # Each technique targets a different sentence pattern that triggers AI detection
     techniques = [
-        "Add personal opinions: 'I think...', 'Honestly...', 'In my experience...'",
-        "Use sentence fragments: 'Big mistake.' 'Not even close.' 'Worth it.'",
-        "Start 5+ sentences with 'And', 'But', 'So', 'Look', 'Okay so'",
-        "Add parenthetical asides: (seriously), (no joke), (at least for me), (wild, right?)",
-        "Use rhetorical questions: 'Right?', 'Makes sense?', 'Sound familiar?'",
-        "Add em-dashes and ellipses: 'stress — and I mean real stress — can wreck you'",
-        "Use casual transitions: 'Anyway', 'Moving on', 'Here's the deal', 'Okay but'",
-        "Break a long sentence into 2-3 short punchy ones",
+        "Split long smooth sentences into 2-3 short declaratives. No filler, just facts.",
+        "Use negation chains: 'Not [X]. Not [Y]. Just [specific Z].' — forces unpredictable token sequences.",
+        "Use inverted colon reveals: 'What [X] actually [does/means]: [unexpected specific detail].'",
+        "Add temporal contrast: 'In [year/period], [X]. By [year/period], [Y].' — anchors abstraction to time.",
+        "Use concessive pivot: 'Still, [unexpected turn].' or 'By contrast, [sharp observation].'",
+        "Add em-dash interruption mid-sentence: '[subject] — [specific inserted detail] — [predicate].'",
+        "Use contrast pairs: '[Short declarative]. [Its inversion or consequence].' — two punches.",
+        "Replace smooth causal chains ('X because Y, which leads to Z') with a sequence of short observations.",
     ]
-    # Pick different techniques per attempt for variety
+    # Pick 4 different techniques per attempt — rotate through the list
     tech_start = (attempt_num - 1) * 3
     picked = [techniques[i % len(techniques)] for i in range(tech_start, tech_start + 4)]
     techniques_block = "\n".join(f"  - {t}" for t in picked)
@@ -447,70 +492,88 @@ def _build_humanize_prompts(
         # ── Surgical mode: only AI-detected sentences are rewritten ──
         capped = ai_sentences[:30]
         sentences_block = "\n".join(f'  {i+1}. "{s}"' for i, s in enumerate(capped))
-        user_prompt = f"""AI detection score: {current_score:.1f}% (must be < {ZEROGPT_PASS_THRESHOLD}%). Attempt #{attempt_num}.
+        user_prompt = f"""AI detection score: {current_score:.1f}% (target: < {ZEROGPT_PASS_THRESHOLD}%). Attempt #{attempt_num}.
 
-Rewrite ONLY these AI-flagged sentences. Make each one sound like a real person wrote it — imperfect, casual, with personality.
+Rewrite ONLY the AI-flagged sentences below using professional perplexity techniques.
+Every sentence in the ARTICLE that is NOT flagged must remain EXACTLY as written.
 
 AI-FLAGGED SENTENCES:
 {sentences_block}
 
-EXAMPLES — notice how the GOOD versions feel messy and real:
-  BAD:  "It is important to note that exercise can significantly reduce stress levels."
-  GOOD: "So here's something I didn't expect — working out actually helps with stress. Like, a lot."
+PROFESSIONAL REWRITE EXAMPLES — technique structure only, do NOT copy these verbatim:
 
-  BAD:  "Research suggests that maintaining social connections is beneficial for mental health."
-  GOOD: "Turns out, just texting a friend when you're stressed? That actually does something. Who knew."
+  FLAGGED: "The policy has been consistently linked to better outcomes because it addresses core structural issues."
+  FIXED:   "The policy changed one variable. Outcomes shifted within a quarter. The link held across all cohorts."
 
-  BAD:  "Implementing a consistent sleep schedule can improve overall well-being."
-  GOOD: "I started going to bed at the same time every night. Felt weird at first. But honestly... it changed everything."
+  FLAGGED: "Despite ongoing challenges, organizations continue to invest in digital transformation at a growing rate."
+  FIXED:   "Challenges are real. Still, the investment case hasn't weakened — downtime at $427 per minute tends to focus priorities."
 
-  BAD:  "These techniques can help individuals manage their stress more effectively."
-  GOOD: "Look — these tricks won't fix everything. But they help. They really do."
+  FLAGGED: "Teams that maintain strong opening partnerships tend to win more matches than those that do not."
+  FIXED:   "When they open well, they average 77. When they don't, 21. That gap explains most of the results table."
 
-FOR THIS ATTEMPT, ESPECIALLY USE THESE TECHNIQUES:
+  FLAGGED: "The season has seen a significant increase in dropped catches compared to previous years."
+  FIXED:   "111 catches dropped in 40 games. Not a blip — a systemic pattern, worst since 2020."
+
+  FLAGGED: "Analysts have noted that death-over execution remains the primary differentiator in close contests."
+  FIXED:   "Death overs decide it. Not the powerplay. Not the middle overs. The last four — every time."
+
+FOR THIS ATTEMPT, PRIORITIZE THESE TECHNIQUES:
 {techniques_block}
 
 RULES:
-- Rewrite ONLY the flagged sentences. Keep everything else EXACTLY as-is.
-- Each rewrite must sound like a different human wrote it — vary the style.
-- Use contractions everywhere (it's, don't, won't, can't, I've, that's).
-- AVOID: {ai_clichés}
-- Keep the same meaning and facts. Don't invent new info.
-- CRITICAL: Do NOT add words. Keep the same or fewer words. Replace, don't expand.
-- Return the COMPLETE article with replacements applied.
+- Rewrite ONLY the numbered flagged sentences. Every other sentence stays EXACTLY as-is.
+- Match the professional editorial tone already present in the article — look at the surrounding sentences.
+- Use contractions where natural (it's, don't, that's, they've) — fine in editorial writing.
+- AVOID AI clichés: {ai_clichés}
+- Keep the same facts and meaning. Do NOT invent new information.
+- NEVER write technique labels (Concessive pivot:, Negation chain:, etc.) in the article text.
+- NEVER reproduce example sentences verbatim — examples show structure, not wording to copy.
+- Remove any first-person source notes ('I couldn't find...') — use 'Granular data unavailable' or omit.
+- BOLD FORMATTING: reduce where excessive. Bold only player names, team names, and the single most critical stat per section. Do NOT bold full analytical clauses or sentences — it flags as AI.
+- CRITICAL: Do NOT add words. Same or fewer words per rewrite. Restructure, never expand.
+- Return the COMPLETE article with replacements applied inline.
 
 ARTICLE:
 {full_markdown}"""
 
     else:
-        # ── Full fallback: humanize the entire document ──
-        user_prompt = f"""AI detection score: {current_score:.1f}% (must be < {ZEROGPT_PASS_THRESHOLD}%). Attempt #{attempt_num}.
+        # ── Full fallback: rewrite the entire document (surgical stalled) ──
+        user_prompt = f"""AI detection score: {current_score:.1f}% (target: < {ZEROGPT_PASS_THRESHOLD}%). Attempt #{attempt_num}.
 
-Rewrite this entire article so it reads like a real human blog — someone with opinions, quirks, and a casual voice. NOT a polished AI essay.
+Rewrite this entire article using professional perplexity techniques.
+The article should read as published editorial content — authoritative, varied, and structurally unpredictable.
 
-TARGET STYLE — notice the imperfections, personality, and casual flow:
+TARGET STYLE — notice structural variety: short punches, splits, temporal contrast, blunt verdicts:
 ---
-Okay so here's the thing about stress. We all deal with it. Every single one of us. And most of the advice out there? It's the same recycled stuff — "just meditate" or "take deep breaths." Cool. Thanks.
+## Week 5: the week the table started to mean something
 
-But here's what actually helped me. I started small. Like embarrassingly small. I'd take a walk around the block when I felt overwhelmed. That's it. No gym membership, no yoga retreat. Just... walking.
+Four teams moved.
 
-And you know what? It worked. Not perfectly. Not overnight. But slowly, things got a little easier. The tight feeling in my chest would loosen up. My brain would quiet down — at least for a bit.
+Gujarat Titans chased 204 — first time in franchise history — and went top. Mumbai Indians won their fourth straight, quietly, by turning the Wankhede into a surface SRH's batting had no answer for. RCB lost again at home. SRH's pre-season favouritism is now a historical footnote: six defeats in eight.
 
-Look, I'm not a doctor. I'm just someone who's been through it. So take what works for you and leave the rest. Deal?
+What this means for the standings: the top-four shape is clearer, and the teams outside it are running low on margin.
+
+## Dropped catches: 111 in 40 games
+
+That figure deserves attention.
+
+Not because one team is responsible — the problem is distributed. But 111 drops across 40 matches is the worst rate since 2020, a season with COVID context that distorts comparison. The 2025 version has no such excuse.
+
+Each drop is a compound-interest mistake. You pay once at the boundary. Then you pay again when the batter reaches 50. Then again when they change the match.
+
+Death overs don't forgive either. LSG held their nerve in Jaipur: Avesh Khan, final over, 9 needed. Two runs the margin. Old-school execution — yorkers, wide lines, fielder placement — still decides games that technology can't script.
 ---
 
-FOR THIS ATTEMPT, ESPECIALLY USE THESE TECHNIQUES:
+FOR THIS ATTEMPT, PRIORITIZE THESE TECHNIQUES:
 {techniques_block}
 
 RULES:
-- Keep ALL headings, sections, facts, and information in the same order.
-- Do NOT remove or invent content. Same info, different voice.
-- Write like you're telling a friend about this over coffee.
-- Use contractions everywhere. Use fragments. Ask questions.
-- Add personal touches: "I think", "honestly", "in my experience", "here's what I found"
-- AVOID: {ai_clichés}
-- Vary sentence length wildly: some 3 words, some 20 words.
-- CRITICAL: Do NOT add words. Keep the same or fewer words. Replace, don't expand.
+- Preserve ALL headings, sections, facts, and information — same order, same structure.
+- Do NOT remove or invent content. Same information, different construction.
+- Vary sentence length throughout: some 3-6 words, some 18-24 words. Never three consecutive sentences of similar length.
+- Use contractions where natural (it's, don't, that's). Professional writing allows these.
+- AVOID AI clichés: {ai_clichés}
+- CRITICAL: Do NOT add words overall. Keep total word count the same or lower.
 - Return the COMPLETE rewritten article in markdown.
 
 ARTICLE:
