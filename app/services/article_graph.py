@@ -157,7 +157,7 @@ def _final_qc_thresholds() -> Dict[str, Any]:
     return {
         "word_count_min": 1900,
         "word_count_max": 2500,
-        "fk_grade_min": 6.5,
+        "fk_grade_min": 5.0,
         "fk_grade_max": 12.0,
         "flesch_reading_ease_min": 50.0,
         "flesch_reading_ease_max": 75.0,

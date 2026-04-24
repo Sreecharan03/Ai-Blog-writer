@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -189,6 +190,9 @@ class PipelineStatusResponse(BaseModel):
 def _run_pipeline_background(pipeline_id: str, initial_state: dict):
     """Runs the LangGraph pipeline in a background thread."""
     settings = _get_settings()
+    # Must be initialised before the try block so the except handler can always
+    # reference it, even if the exception fires before the stream loop begins.
+    final_state: dict = {}
 
     # Update status to running
     try:
@@ -203,6 +207,29 @@ def _run_pipeline_background(pipeline_id: str, initial_state: dict):
     except Exception:
         pass
 
+    # Watchdog: if the pipeline hangs (GPT timeout, etc.) mark it timed_out
+    # after 15 minutes so the row is never stuck in 'running' forever.
+    def _timeout_watchdog():
+        logger.error("Pipeline %s exceeded 15-minute timeout — marking timed_out", pipeline_id)
+        try:
+            conn = _db_conn(settings)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE public.pipeline_runs
+                       SET status='timed_out', error_detail='Pipeline exceeded 15-minute timeout',
+                           completed_at=now()
+                       WHERE pipeline_id=%s AND status='running'""",
+                    (pipeline_id,),
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    watchdog = threading.Timer(900, _timeout_watchdog)
+    watchdog.daemon = True
+    watchdog.start()
+
     try:
         from app.services.article_graph import compile_pipeline, _log_pipeline_event
 
@@ -215,7 +242,6 @@ def _run_pipeline_background(pipeline_id: str, initial_state: dict):
         )
 
         # Stream through the graph — each node yields its output
-        final_state = {}
         for step_output in compiled.stream(initial_state, config):
             # step_output is {node_name: {state_updates}}
             for node_name, updates in step_output.items():
@@ -293,6 +319,7 @@ def _run_pipeline_background(pipeline_id: str, initial_state: dict):
         conn.commit()
         conn.close()
 
+        watchdog.cancel()
         _log_pipeline_event(
             initial_state["tenant_id"], pipeline_id,
             "pipeline_completed", result_summary,
@@ -300,6 +327,7 @@ def _run_pipeline_background(pipeline_id: str, initial_state: dict):
         logger.info("Pipeline %s completed successfully", pipeline_id)
 
     except Exception as e:
+        watchdog.cancel()
         error_msg = str(e)[:500]
         logger.error("Pipeline %s failed: %s", pipeline_id, error_msg)
 
@@ -344,9 +372,27 @@ def start_pipeline(
     pipeline_id = str(uuid.uuid4())
     settings = _get_settings()
 
-    # Create pipeline_runs row
     conn = _db_conn(settings)
     _ensure_pipeline_table(conn)
+
+    # Guard: max 2 active pipelines per tenant to prevent runaway GPT spend
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT COUNT(*) FROM public.pipeline_runs
+               WHERE tenant_id=%s::uuid AND status IN ('pending', 'running')""",
+            (claims.tenant_id,),
+        )
+        row = cur.fetchone()
+        active = row[0] if row else 0
+
+    if active >= 2:
+        conn.close()
+        raise HTTPException(
+            status_code=429,
+            detail=f"You already have {active} active pipeline(s) running. Wait for one to complete before starting another.",
+        )
+
+    # Create pipeline_runs row
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO public.pipeline_runs
@@ -414,7 +460,6 @@ def get_pipeline_status(
     """Poll pipeline status. Returns result_summary when completed."""
     settings = _get_settings()
     conn = _db_conn(settings)
-    _ensure_pipeline_table(conn)
     with conn.cursor() as cur:
         cur.execute(
             """SELECT pipeline_id::text, tenant_id::text, kb_id::text, request_id::text,
