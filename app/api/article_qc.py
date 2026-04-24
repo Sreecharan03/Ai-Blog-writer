@@ -259,7 +259,7 @@ def _count_unique_sections(text: str) -> int:
     text = text or ""
     # Collect ## and ### headings (always sections)
     sub_headings = re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)
-    # Collect # headings (skip the very first one — that's the title)
+    # Collect # headings (skip the very first one  -  that's the title)
     h1_headings = re.findall(r"^#\s+(.+)$", text, re.MULTILINE)
     if h1_headings:
         h1_headings = h1_headings[1:]  # skip article title
@@ -275,9 +275,9 @@ def _count_unique_sections(text: str) -> int:
 
 
 def _has_faq_section(text: str) -> bool:
-    """Check if article has an FAQ heading (## FAQ, ## Frequently Asked Questions, etc.)."""
+    """Check if article has an FAQ heading (## FAQ, ## Frequently Asked Questions, ## 14) FAQ, etc.)."""
     text = text or ""
-    return bool(re.search(r"^#{1,3}\s+(?:FAQ|Frequently\s+Asked)", text, re.MULTILINE | re.IGNORECASE))
+    return bool(re.search(r"^#{1,3}\s+.*\b(?:FAQ|Frequently\s+Asked)\b", text, re.MULTILINE | re.IGNORECASE))
 
 
 def _sha256_bytes(b: bytes) -> str:
@@ -330,13 +330,15 @@ def get_qc_report(
     # plan thresholds (including new quality checks)
     thresholds = {
         "word_count_min": 1900,
-        "word_count_max": 2500,
-        "fk_grade_min": 5.0,
+        "word_count_max": 3000,
+        "fk_grade_min": 5.5,
         "fk_grade_max": 12.0,
-        "flesch_reading_ease_min": 70.0,  # FRE > 70 = easy to read (humanoid style)
-        "repetition_ratio_max": 0.15,     # max 15% repeated sentences
-        "unique_sections_min": 6,         # 8-section template, allow 6 minimum
-        "faq_section_required": True,     # must have FAQ or Frequently Asked heading
+        "flesch_reading_ease_min": 50.0,
+        "flesch_reading_ease_max": 85.0,
+        "repetition_ratio_max": 0.15,
+        "unique_sections_min": 6,
+        "unique_sections_max": 16,
+        "faq_section_required": False,
     }
 
     bucket_name = _pick(settings, "GCS_BUCKET_NAME")
@@ -448,12 +450,14 @@ def get_qc_report(
     has_faq = _has_faq_section(text)
     metrics["has_faq_section"] = has_faq
 
+    fre_max = thresholds.get("flesch_reading_ease_max", 100.0)
+    sec_max = thresholds.get("unique_sections_max", 9999)
     qc_pass = (
         (thresholds["word_count_min"] <= wc <= thresholds["word_count_max"])
         and (thresholds["fk_grade_min"] <= fk <= thresholds["fk_grade_max"])
-        and (fre >= thresholds["flesch_reading_ease_min"])
+        and (thresholds["flesch_reading_ease_min"] <= fre <= fre_max)
         and (rep_ratio <= thresholds["repetition_ratio_max"])
-        and (unique_sec >= thresholds["unique_sections_min"])
+        and (thresholds["unique_sections_min"] <= unique_sec <= sec_max)
         and (has_faq or not thresholds.get("faq_section_required", False))
     )
 

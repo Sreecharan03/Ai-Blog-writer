@@ -298,7 +298,7 @@ _SIMPLE_REPL = {
     "various": "many",              # 3 -> 2
 }
 
-# Only remove true filler words — "generally" and "mostly" carry meaning
+# Only remove true filler words  -  "generally" and "mostly" carry meaning
 _FILLER_RE = re.compile(r"\b(?:very|really|quite|just|simply|basically|actually)\b", re.IGNORECASE)
 
 
@@ -330,7 +330,7 @@ def _split_chunks(text: str, max_words: int) -> list[str]:
     s = text.strip()
     if not s:
         return []
-    # Split only at real sentence endings — do NOT touch commas/semicolons
+    # Split only at real sentence endings  -  do NOT touch commas/semicolons
     parts = re.split(r"(?<=[.!?])\s+", s)
     chunks: list[str] = []
     for part in parts:
@@ -350,7 +350,7 @@ def _split_chunks(text: str, max_words: int) -> list[str]:
 
 def _split_long_sentences(text: str, max_words: int = 20) -> str:
     """Only split sentences that are genuinely too long (>20 words).
-    Preserve natural flow — never break at commas."""
+    Preserve natural flow  -  never break at commas."""
     if not text:
         return text
     lines = text.splitlines()
@@ -579,7 +579,7 @@ class QCFixResponse(BaseModel):
 @router.post("/requests/{request_id}/qc-fix", response_model=QCFixResponse)
 def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_claims)):
     """
-    Day 21 (QC fix) — deterministic:
+    Day 21 (QC fix)  -  deterministic:
       1) expand_only until wc in [1950..2050]
       2) trim_only if wc > 2050
       3) simplify_only if FK > 9 (keep wc stable)
@@ -728,25 +728,20 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     to_add = max(80, wc_max + 30 - wc)
 
                 prompt = {
-                    "task": "expand_only",
+                    "task": "deepen_inline",
                     "title": title,
                     "keywords": keywords,
                     "targets": thresholds,
                     "current_metrics": {"word_count": wc, "fk_grade": fk},
                     "hard_rules": [
-                        "Do NOT edit or rewrite existing text.",
-                        "Append NEW sections only at the end.",
-                        "Each new section MUST cover a DIFFERENT aspect not already in the draft.",
-                        "Do NOT repeat any heading, topic, or idea already present.",
-                        "Use ## headings + bullet lists + short paragraphs (2-4 lines).",
-                        "Write in warm, friendly tone — like explaining to a child.",
-                        "Use contractions (it's, don't, you'll) and everyday analogies.",
-                        "Target Flesch Reading Ease > 75 and FK <= 8.8.",
-                        f"Add at least {to_add} words in this call (minimum).",
-                        "If the article lacks a FAQ section, add one with 5-8 simple questions and short answers.",
-                        "Add concrete examples, steps, checklists, or relatable stories.",
-                        "Keep the topic consistent with the title + keywords.",
-                        "Return JSON: { append_markdown: string } only.",
+                        f"This article is {wc} words. Target is {wc_min}-{wc_max}. You must add approximately {to_add} words.",
+                        "Find the 2-4 thinnest sections (fewest words). Expand each one by adding 2-4 analytical sentences WITHIN that section  -  after existing sentences in that paragraph.",
+                        "Do NOT add new sections at the end. Do NOT change or move any heading. Do NOT rewrite existing sentences.",
+                        "Add context, cause/consequence, significance, or a contrasting data point where the section is thin.",
+                        "If the article has no ## FAQ section, insert one before the conclusion with 5-7 real reader questions answered at Grade 7+ level.",
+                        "Write at Grade 7+ editorial level  -  analytical, authoritative, no child-level language.",
+                        "Target Flesch Reading Ease 50-75 and FK grade 6.5-12.",
+                        "Return the COMPLETE revised article as JSON: { draft_markdown: string }. Every section must be present.",
                     ],
                     "draft_markdown_input": current,
                 }
@@ -764,11 +759,15 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                 for k in usage_total:
                     usage_total[k] += int(usage.get(k) or 0)
 
-                append = _clean_md(str(parsed.get("append_markdown") or parsed.get("content") or parsed.get("text") or ""))
+                new_md = _clean_md(str(parsed.get("draft_markdown") or parsed.get("revised_markdown") or parsed.get("content") or ""))
                 changed = False
-                # guard: accept any append that adds at least 50 words (lowered from 60% of to_add)
-                if append and _wc(append) >= 50:
-                    candidate = _clean_md(f"{current}\n\n{append}")
+                # Safety: count headings in original  -  reject if model truncated sections
+                orig_section_count = len(re.findall(r"^#{1,3}\s+", current, re.MULTILINE))
+                new_section_count = len(re.findall(r"^#{1,3}\s+", new_md, re.MULTILINE)) if new_md else 0
+                sections_intact = new_section_count >= max(1, orig_section_count - 1)
+                # Accept if longer AND sections weren't dropped
+                if new_md and _wc(new_md) > wc + 30 and sections_intact:
+                    candidate = new_md
                     cand_wc, cand_fk, cand_pen = _score(candidate)
                     if cand_pen < curr_pen - 0.01 or (wc_min <= cand_wc <= wc_max + 30):
                         current = candidate
@@ -779,9 +778,6 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                             curr_wc2, curr_fk2, curr_pen2 = _score(current)
                             if post_pen < curr_pen2 - 0.01:
                                 current = post
-                else:
-                    # still continue loop; next step will attempt expand again
-                    _ = None
                 if changed:
                     stall_count = 0
                 else:
@@ -873,7 +869,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     "Keep sentences under 20 words where possible.",
                     "Prefer bullets over long paragraphs.",
                     "PRESERVE the original meaning and structure of each sentence.",
-                    "Do NOT rewrite sentences from scratch — only edit for clarity.",
+                    "Do NOT rewrite sentences from scratch  -  only edit for clarity.",
                     "Return JSON: { draft_markdown: string } only.",
                 ]
                 if fk > fk_max + 2.0:
@@ -915,7 +911,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                 # Only one additional attempt for very high FK (removed 3rd aggressive rewrite)
                 if fk > fk_max + 2.0:
                     hard_rules2 = hard_rules + [
-                        "Edit each sentence for simpler vocabulary — do NOT rewrite from scratch.",
+                        "Edit each sentence for simpler vocabulary  -  do NOT rewrite from scratch.",
                         "You may remove minor details to lower reading grade.",
                         "Replace technical terms with plain English equivalents.",
                     ]
@@ -945,7 +941,7 @@ def qc_fix(request_id: str, req: QCFixRequest, claims: Claims = Depends(require_
                     if out2:
                         candidates.append(out2)
 
-                # 3rd aggressive fallback REMOVED — it destroyed content quality
+                # 3rd aggressive fallback REMOVED  -  it destroyed content quality
 
                 best_text = current
                 best_pen = curr_pen

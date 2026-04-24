@@ -32,6 +32,8 @@ from app.api.article_zerogpt import router as article_zerogpt_router
 from app.api.article_revise import router as article_revise_router
 from app.api.article_zerogpt_fix import router as article_zerogpt_fix_router
 from app.api.article_pipeline import router as article_pipeline_router
+from app.api.dashboard import router as dashboard_router
+from app.api.kb_discover import router as kb_discover_router
 
 APP_NAME = "Sighnal Backend"
 
@@ -69,6 +71,8 @@ def create_app() -> FastAPI:
     app.include_router(article_revise_router)
     app.include_router(article_zerogpt_fix_router)
     app.include_router(article_pipeline_router)
+    app.include_router(dashboard_router)
+    app.include_router(kb_discover_router)
 
     # Serve the pipeline tester UI
     static_dir = Path(__file__).parent / "static"

@@ -150,6 +150,14 @@ class PipelineCreateRequest(BaseModel):
     temperature: float = 0.7
     max_output_tokens: int = 8192
     top_k_sources: int = 8
+    rag_grounding_ratio: float = Field(0.95, ge=0.8, le=0.99)
+    enable_agentic_orchestration: bool = True
+    expanded_query_count: int = Field(4, ge=1, le=6)
+    hybrid_top_k_per_query: int = Field(30, ge=5, le=60)
+    predictability_top_n: int = Field(14, ge=6, le=30)
+    max_predictability_rewrite_passes: int = Field(1, ge=0, le=2)
+    zerogpt_fix_max_attempts: int = Field(4, ge=1, le=8)
+    max_quality_retries: int = Field(4, ge=0, le=10)
 
     # Reuse existing
     request_id: Optional[str] = None  # reuse existing article request
@@ -249,11 +257,14 @@ def _run_pipeline_background(pipeline_id: str, initial_state: dict):
 
         result_summary = {
             "article_markdown": final_state.get("article_markdown", ""),
-            "word_count": len((final_state.get("article_markdown") or "").split()),
+            "word_count": int(final_state.get("final_word_count") or len((final_state.get("article_markdown") or "").split())),
             "qc_pass": final_state.get("qc_pass", False),
             "qc_metrics": final_state.get("qc_metrics"),
+            "qc_thresholds": final_state.get("qc_thresholds"),
             "zerogpt_score": final_state.get("zerogpt_score"),
             "zerogpt_pass": final_state.get("zerogpt_pass", False),
+            "quality_retry_count": final_state.get("quality_retry_count", 0),
+            "max_quality_retries": final_state.get("max_quality_retries"),
             "source_analysis": final_state.get("source_analysis"),
             "total_tokens": final_state.get("total_tokens", 0),
             "steps_completed": final_state.get("steps_completed", []),
@@ -366,10 +377,20 @@ def start_pipeline(
         "temperature": req.temperature,
         "max_output_tokens": req.max_output_tokens,
         "top_k_sources": req.top_k_sources,
+        "rag_grounding_ratio": req.rag_grounding_ratio,
+        "enable_agentic_orchestration": req.enable_agentic_orchestration,
+        "expanded_query_count": req.expanded_query_count,
+        "hybrid_top_k_per_query": req.hybrid_top_k_per_query,
+        "predictability_top_n": req.predictability_top_n,
+        "max_predictability_rewrite_passes": req.max_predictability_rewrite_passes,
+        "zerogpt_fix_max_attempts": req.zerogpt_fix_max_attempts,
+        "max_quality_retries": req.max_quality_retries,
         "length_target": req.length_target,
         "request_id": req.request_id,
         "qc_pass": False,
         "zerogpt_pass": False,
+        "quality_retry_count": 0,
+        "zerogpt_checked_fingerprint": None,
         "total_tokens": 0,
         "steps_completed": [],
         "current_step": "crawl",
@@ -489,10 +510,20 @@ def resume_pipeline(
         "temperature": cfg.get("temperature", 0.7),
         "max_output_tokens": cfg.get("max_output_tokens", 8192),
         "top_k_sources": cfg.get("top_k_sources", 8),
+        "rag_grounding_ratio": cfg.get("rag_grounding_ratio", 0.95),
+        "enable_agentic_orchestration": cfg.get("enable_agentic_orchestration", True),
+        "expanded_query_count": cfg.get("expanded_query_count", 4),
+        "hybrid_top_k_per_query": cfg.get("hybrid_top_k_per_query", 30),
+        "predictability_top_n": cfg.get("predictability_top_n", 14),
+        "max_predictability_rewrite_passes": cfg.get("max_predictability_rewrite_passes", 1),
+        "zerogpt_fix_max_attempts": cfg.get("zerogpt_fix_max_attempts", 4),
+        "max_quality_retries": cfg.get("max_quality_retries", 4),
         "length_target": cfg.get("length_target", 2000),
         "request_id": cfg.get("request_id"),
         "qc_pass": False,
         "zerogpt_pass": False,
+        "quality_retry_count": 0,
+        "zerogpt_checked_fingerprint": None,
         "total_tokens": 0,
         "steps_completed": [],
         "current_step": failed_step or "crawl",

@@ -460,7 +460,7 @@ def run_zerogpt(
                 out_uri = str(row["gcs_zerogpt_uri"])
                 out_fp = str(row["zerogpt_fingerprint"])
                 out_score = row.get("zerogpt_score")
-                cached_pass = (out_score is not None) and (float(out_score) < 10.0)
+                cached_pass = (out_score is not None) and (float(out_score) < 20.0)
                 spans_count = int(meta.get("spans_count") or 0) if isinstance(meta, dict) else 0
 
                 signed = _gcs_signed_url(gcs, out_uri, signed_url_minutes) if signed_url else None
@@ -511,6 +511,11 @@ def run_zerogpt(
     # ---- Call ZeroGPT (api.zerogpt.com) ----
     resp = _call_zerogpt_zerogpt_com(base_url=base_url, api_key=api_key, text=draft_md, timeout_s=60)
     score, meta = _extract_score(resp)
+    if score is None:
+        import logging as _logging
+        _logging.getLogger("article_zerogpt").warning(
+            "ZeroGPT returned null score. Raw response: %s", str(resp)[:500]
+        )
     zerogpt_pass = (score is not None) and (score < 20.0)
     try:
         txt_words = int(meta.get("textWords") or 0) if isinstance(meta, dict) else 0

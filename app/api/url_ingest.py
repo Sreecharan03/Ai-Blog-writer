@@ -560,8 +560,8 @@ def _render_js_if_needed(url: str, user_agent: str, timeout_sec: int) -> Optiona
             page = ctx.new_page()
             page.set_default_navigation_timeout(timeout_sec * 1000)
             page.goto(url, wait_until="networkidle")
-            # give SPA a short breath
-            page.wait_for_timeout(800)
+            # wait for JS stats tables to finish rendering
+            page.wait_for_timeout(2500)
             content = page.content().encode("utf-8", errors="ignore")
             browser.close()
             return content
@@ -1543,7 +1543,7 @@ def _crawl_and_ingest(job: CrawlJob) -> Dict[str, Any]:
             if kind == "html":
                 extracted_text, extract_meta = extract_from_html(fr.content, final_url, fr.headers)
                 extract_method = extract_meta.get("extraction_method", "html")
-                extraction_ok = len(extracted_text) >= 300  # safety threshold
+                extraction_ok = len(extracted_text.split()) >= 150  # word-count threshold — catches JS pages that return nav noise but no real content
                 # JS auto-render if too thin and allowed
                 if (not extraction_ok) and job.config.render_js in ("auto", "always") and _playwright_available():
                     rendered = _render_js_if_needed(final_url, job.config.user_agent, job.config.request_timeout_sec)
@@ -1626,6 +1626,23 @@ def _crawl_and_ingest(job: CrawlJob) -> Dict[str, Any]:
                 pass
 
             if extraction_ok:
+                # Content-level dedup: skip if identical text already exists in this KB
+                if text_fingerprint:
+                    try:
+                        with conn.cursor() as _cur:
+                            _cur.execute(
+                                "SELECT doc_id FROM public.documents WHERE tenant_id=%s::uuid AND kb_id=%s::uuid AND text_fingerprint=%s LIMIT 1",
+                                (job.tenant_id, job.kb_id, text_fingerprint),
+                            )
+                            _existing = _cur.fetchone()
+                        if _existing:
+                            _log_job_event(conn, job.tenant_id, None, job.job_id, "page_skipped_duplicate",
+                                           {"url": final_url, "existing_doc_id": str(_existing[0]), "text_fingerprint": text_fingerprint})
+                            conn.commit()
+                            continue
+                    except Exception:
+                        pass  # dedup check failed — proceed with normal insert
+
                 try:
                     _insert_document_row(
                         conn,
