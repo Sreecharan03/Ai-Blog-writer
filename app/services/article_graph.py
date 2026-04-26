@@ -36,6 +36,7 @@ class PipelineState(TypedDict, total=False):
     title: str
     keywords: List[str]
     url: Optional[str]
+    urls: Optional[List[str]]
     skip_crawl: bool
 
     # ── Crawl config ──
@@ -260,10 +261,15 @@ def _can_retry_quality(state: PipelineState) -> bool:
 
 
 # ============================================================
-# Node 1: CRAWL  -  fetch URL, extract, preprocess, chunk, embed
+# Node 1: CRAWL  -  fetch URL(s), extract, preprocess, chunk, embed
 # ============================================================
 def crawl_node(state: PipelineState) -> dict:
-    """Crawl a URL and auto-pipeline (preprocess -> chunk -> embed)."""
+    """Crawl one or more URLs and auto-pipeline (preprocess -> chunk -> embed).
+
+    Accepts either a single `url` (str) or a `urls` list (up to 8).
+    Each URL is crawled independently; stats are aggregated.
+    Pipeline continues even if some URLs fail — only aborts if ALL fail.
+    """
     if state.get("skip_crawl"):
         logger.info("Pipeline: skip_crawl=True, skipping crawl step")
         return {
@@ -272,42 +278,67 @@ def crawl_node(state: PipelineState) -> dict:
             "current_step": "create_request",
         }
 
-    url = state.get("url")
-    if not url:
+    # Build ordered list — urls list takes priority over single url
+    raw_urls: list = list(state.get("urls") or [])[:8]
+    if not raw_urls and state.get("url"):
+        raw_urls = [state["url"]]
+
+    if not raw_urls:
         return {"error": "No URL provided and skip_crawl=False", "current_step": "crawl"}
 
     from app.api.url_ingest import URLIngestRequest, CrawlJob, _crawl_and_ingest, _normalize_url
     from urllib.parse import urlparse
 
-    seed_norm = _normalize_url(url)
-    seed_host = urlparse(seed_norm).netloc.lower()
+    aggregated = {"pages_fetched": 0, "pages_failed": 0, "chunks_stored": 0, "urls_crawled": []}
+    errors = []
 
-    payload = URLIngestRequest(
-        url=url,
-        max_depth=state.get("max_depth", 0),
-        max_pages=state.get("max_pages", 1),
-        same_host_only=True,
-        respect_robots=state.get("respect_robots", False),
-        user_agent=state.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
-        auto_pipeline=state.get("auto_pipeline", True),
-        wait=True,
-    )
+    for url in raw_urls:
+        try:
+            seed_norm = _normalize_url(url)
+            seed_host = urlparse(seed_norm).netloc.lower()
 
-    job = CrawlJob(
-        tenant_id=state["tenant_id"],
-        user_id=state.get("user_id", "pipeline"),
-        kb_id=state["kb_id"],
-        job_id=str(uuid.uuid4()),
-        seed_url=seed_norm,
-        seed_host=seed_host,
-        scope="tenant_private",
-        config=payload,
-    )
+            payload = URLIngestRequest(
+                url=url,
+                max_depth=state.get("max_depth", 0),
+                max_pages=state.get("max_pages", 1),
+                same_host_only=True,
+                respect_robots=state.get("respect_robots", False),
+                user_agent=state.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+                auto_pipeline=state.get("auto_pipeline", True),
+                wait=True,
+            )
 
-    stats = _crawl_and_ingest(job)
+            job = CrawlJob(
+                tenant_id=state["tenant_id"],
+                user_id=state.get("user_id", "pipeline"),
+                kb_id=state["kb_id"],
+                job_id=str(uuid.uuid4()),
+                seed_url=seed_norm,
+                seed_host=seed_host,
+                scope="tenant_private",
+                config=payload,
+            )
+
+            stats = _crawl_and_ingest(job)
+            aggregated["pages_fetched"] += stats.get("pages_fetched", 0)
+            aggregated["pages_failed"] += stats.get("pages_failed", 0)
+            aggregated["chunks_stored"] += stats.get("chunks_stored", 0)
+            aggregated["urls_crawled"].append(url)
+            logger.info("crawl_node: %s → pages=%s chunks=%s", url, stats.get("pages_fetched"), stats.get("chunks_stored"))
+
+        except Exception as e:
+            errors.append({"url": url, "error": str(e)[:200]})
+            logger.warning("crawl_node: failed for %s: %s", url, str(e)[:200])
+
+    # Abort only if every URL failed — partial success is fine
+    if errors and not aggregated["urls_crawled"]:
+        return {"error": f"All {len(raw_urls)} URL(s) failed to crawl: {errors}", "current_step": "crawl"}
+
+    if errors:
+        aggregated["partial_errors"] = errors
 
     return {
-        "crawl_stats": stats,
+        "crawl_stats": aggregated,
         "steps_completed": state.get("steps_completed", []) + ["crawl"],
         "current_step": "create_request",
     }

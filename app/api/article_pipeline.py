@@ -129,8 +129,9 @@ def _ensure_pipeline_table(conn):
 # Request / Response models
 # ============================================================
 class PipelineCreateRequest(BaseModel):
-    # Source — provide url OR set skip_crawl=True with existing kb_id
+    # Source — provide url, urls (up to 8), OR set skip_crawl=True with existing kb_id
     url: Optional[str] = None
+    urls: List[str] = Field(default_factory=list)
     skip_crawl: bool = False
 
     # Article
@@ -362,8 +363,10 @@ def start_pipeline(
 ):
     """Start a full article generation pipeline. Returns immediately with pipeline_id."""
     # Validate
-    if not req.skip_crawl and not req.url:
-        raise HTTPException(status_code=400, detail="Provide 'url' or set 'skip_crawl': true")
+    if not req.skip_crawl and not req.url and not req.urls:
+        raise HTTPException(status_code=400, detail="Provide 'url', 'urls' (list), or set 'skip_crawl': true")
+    if req.urls and len(req.urls) > 8:
+        raise HTTPException(status_code=400, detail="Maximum 8 URLs allowed in 'urls'")
     if not req.kb_id:
         raise HTTPException(status_code=400, detail="kb_id is required")
     if not req.title or not req.title.strip():
@@ -412,6 +415,7 @@ def start_pipeline(
         "title": req.title,
         "keywords": req.keywords,
         "url": req.url,
+        "urls": req.urls,
         "skip_crawl": req.skip_crawl,
         "max_depth": req.max_depth,
         "max_pages": req.max_pages,
@@ -548,6 +552,7 @@ def resume_pipeline(
         "title": cfg.get("title", ""),
         "keywords": cfg.get("keywords", []),
         "url": cfg.get("url"),
+        "urls": cfg.get("urls", []),
         "skip_crawl": True,  # Always skip crawl on resume
         "auto_pipeline": True,
         "draft_provider": cfg.get("draft_provider", "openai"),
