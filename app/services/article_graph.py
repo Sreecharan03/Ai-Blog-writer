@@ -157,7 +157,7 @@ def _log_pipeline_event(tenant_id: str, pipeline_id: str, event_type: str, detai
 def _final_qc_thresholds() -> Dict[str, Any]:
     return {
         "word_count_min": 1900,
-        "word_count_max": 2500,
+        "word_count_max": 3000,
         "fk_grade_min": 5.0,
         "fk_grade_max": 12.0,
         "flesch_reading_ease_min": 50.0,
@@ -175,7 +175,7 @@ def _post_humanization_qc_thresholds() -> Dict[str, Any]:
     # FK/FRE are intentionally unchecked here to avoid an unescapable loop.
     return {
         "word_count_min": 1900,
-        "word_count_max": 2500,
+        "word_count_max": 3000,
         "fk_grade_min": 0.0,
         "fk_grade_max": 99.0,
         "flesch_reading_ease_min": 0.0,
