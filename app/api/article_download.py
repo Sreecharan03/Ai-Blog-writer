@@ -106,9 +106,21 @@ def _fetch_from_gcs(gcs_uri: str) -> tuple[str, str]:
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"GCS download failed: {exc}")
 
+    # Handle two GCS artifact shapes:
+    # Shape A (blog pipeline): {"draft_markdown": "...", "title": "..."}
+    # Shape B (legacy):        {"draft": {"draft_markdown": "...", "title": "..."}}
     draft    = data.get("draft") or {}
-    markdown = (draft.get("draft_markdown") or "").strip()
-    title    = (draft.get("title") or data.get("topic") or "").strip()
+    markdown = (
+        data.get("draft_markdown")          # Shape A
+        or draft.get("draft_markdown")      # Shape B
+        or ""
+    ).strip()
+    title    = (
+        data.get("title")
+        or draft.get("title")
+        or data.get("topic")
+        or ""
+    ).strip()
 
     if not markdown:
         raise HTTPException(
@@ -151,7 +163,7 @@ def download_article_docx(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT gcs_draft_uri, status, topic
+                SELECT gcs_draft_uri, status, title
                 FROM   public.article_requests
                 WHERE  tenant_id = %s::uuid
                   AND  request_id = %s::uuid
@@ -166,7 +178,7 @@ def download_article_docx(
     if not row:
         raise HTTPException(status_code=404, detail="Article request not found")
 
-    gcs_draft_uri, status, topic = row
+    gcs_draft_uri, status, topic = row  # topic holds the title column value
 
     _READY = {"completed", "completed_with_warnings"}
     if status not in _READY:

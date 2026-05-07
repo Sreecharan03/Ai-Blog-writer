@@ -36,6 +36,8 @@ Stress_managment_test.docx
 
 # Temp scripts and test data
 body.json
+body_*.json
+outputs/
 draft_output.json
 draft_info.json
 gpt52_draft.md

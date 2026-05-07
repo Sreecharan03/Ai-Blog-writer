@@ -583,6 +583,11 @@ def finalize_node(state: PipelineState) -> dict:
         final_step = "completed"
         error = None
 
+    # Ensure structural HTML comments survive QC/zerogpt rewrites
+    _AUTHOR_BIO = "<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
+    if article_markdown and _AUTHOR_BIO not in article_markdown:
+        article_markdown = article_markdown.rstrip() + "\n\n" + _AUTHOR_BIO
+
     result = {
         "article_markdown": article_markdown,
         "final_word_count": len((article_markdown or "").split()),

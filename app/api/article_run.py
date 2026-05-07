@@ -24,9 +24,11 @@ from openai import OpenAI
 
 try:
     from app.services.blog_pipeline.pipeline_runner import run_blog_pipeline as _run_blog_pipeline
+    from app.services.blog_pipeline.prompt_engine import load_brand_context as _load_brand_context
     _BLOG_PIPELINE_AVAILABLE = True
 except Exception:
     _BLOG_PIPELINE_AVAILABLE = False
+    _load_brand_context = None  # type: ignore
 
 
 router = APIRouter(prefix="/api/v1/articles", tags=["article-run"])
@@ -2229,6 +2231,13 @@ def run_article_request(
 
             if req.use_blog_pipeline and _BLOG_PIPELINE_AVAILABLE:
                 # ── Multi-agent section pipeline ──────────────────────────
+                brand_ctx = None
+                if _load_brand_context is not None:
+                    try:
+                        brand_ctx = _load_brand_context(conn, tenant_id)
+                    except Exception:
+                        brand_ctx = None
+
                 blog_result = _run_blog_pipeline(
                     client=client,
                     model=model_used,
@@ -2236,6 +2245,7 @@ def run_article_request(
                     keywords=keywords,
                     sources=used_sources,
                     target_words=int(length_target),
+                    brand_context=brand_ctx,
                 )
                 compose_usage = blog_result.get("usage", {})
                 compose_meta = {

@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from .prompts import SECTION_WRITER_SYSTEM, SECTION_WRITER_USER
 from .gates_local_qc import run_local_qc, word_count
+from .prompt_engine import BrandContext
 
 MAX_RETRIES = 2
 BASE_TEMPERATURE = 0.75
@@ -84,6 +85,7 @@ def write_section(
     sparse: bool = False,
     prev_section_text: Optional[str] = None,
     max_tokens: int = 700,
+    brand_context: Optional[BrandContext] = None,
 ) -> Tuple[str, bool, List[str], Dict[str, int], Dict[str, Any]]:
     """
     Write one blog section with CoT + self-critique + local QC gate.
@@ -111,6 +113,10 @@ def write_section(
         if sparse else
         "Evidence coverage is adequate. Prefer Evidence Locker facts for specific claims."
     )
+
+    # Build system prompt: static base + brand voice overlay (tenant-specific)
+    voice_block = brand_context.voice_block() if brand_context else ""
+    system_content = SECTION_WRITER_SYSTEM + ("\n\n" + voice_block if voice_block else "")
 
     total_usage: Dict[str, int] = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     best_text = ""
@@ -140,7 +146,7 @@ def write_section(
             resp = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": SECTION_WRITER_SYSTEM},
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=temperature,

@@ -1,45 +1,147 @@
 # Sighnal — AI Content Generator Backend
 
-**FastAPI** · **Supabase Postgres** · **Google Cloud Storage** · **OpenAI GPT-5.2** · **Gemini AI** · **ZeroGPT**
+**FastAPI** · **Supabase Postgres** · **Google Cloud Storage** · **OpenAI GPT-5.2** · **Gemini AI** · **ZeroGPT** · **LangGraph**
 
-Multi-tenant backend that ingests documents/URLs → preprocesses into a knowledge base → generates ~2000-2500 word humanized blog articles → performs QC (readability + AI detection) → surgically fixes AI-detected sentences → stores everything in GCS.
+Multi-tenant backend that ingests documents/URLs → builds a knowledge base → generates ~2000-word humanized blog articles through a 6-agent pipeline → enforces readability + AI-detection QC → stores output in GCS → streams clean Word (.docx) downloads.
 
 ---
 
 ## What Is Sighnal?
 
-Sighnal is a backend-first, multi-tenant AI content system built for the full pipeline:
+Sighnal is a backend-first, multi-tenant AI content system. Every article runs through five isolated layers:
 
-1. **Ingest** — upload PDFs, DOCX, or crawl URLs into a tenant Knowledge Base
-2. **Preprocess** — clean, chunk, summarize, embed (pgvector)
-3. **Retrieve** — hybrid vector + keyword + entity search
-4. **Generate** — ~2000-2500 word blog articles via OpenAI GPT-5.2 (outline-first architecture)
-5. **QC** — word count, Flesch Reading Ease > 70, FK grade, repetition, section count, FAQ check
-6. **Detect** — ZeroGPT AI detection scoring (target < 20%)
-7. **Humanize** — surgical zerogpt-fix loop: rephrase only AI-flagged sentences, auto-escalates to full rewrite if needed
-
-All artifacts stored in **Google Cloud Storage (GCS)**. Finance and audit logs in **Supabase**.
+| Layer | Name | What it does |
+|---|---|---|
+| **A** | Retrieval | Crawl URLs, extract grounded facts, hybrid RAG retrieval |
+| **B** | Brand Voice | Per-tenant persona, tone, audience injected into every writing agent |
+| **C** | Article Engine | 6-agent multi-agent pipeline: plan → write → humanize → assemble |
+| **D** | QC & Safety | FK / FRE / ZeroGPT gates with automated surgical fix passes |
+| **E** | Output | GCS storage → Word document (.docx) streaming download |
 
 ---
 
 ## Architecture
 
 ```
-[Client UI] → [FastAPI Backend]
-                     ↓
-         ┌───────────────────────┐
-         │  GCS Content Lake     │  raw/ · processed/ · articles/
-         └───────────────────────┘
-         ┌───────────────────────┐
-         │  Supabase Postgres    │  tenants · KBs · chunks · embeddings
-         │  + pgvector           │  job_events · usage_events
-         └───────────────────────┘
-         ┌───────────────────────┐
-         │  OpenAI API           │  GPT-5.2 (draft + QC-fix + humanize)
-         │  Groq API (fallback)  │  Kimi K2 / Llama 3.3
-         │  Gemini API           │  embeddings · summarization
-         │  ZeroGPT API          │  AI detection scoring
-         └───────────────────────┘
+CLIENT (HTTP)
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│  API Layer  (FastAPI)                                       │
+│                                                             │
+│  POST /api/v1/articles/run         →  article_run.py        │
+│  GET  /api/v1/pipeline/{id}        →  article_run.py        │
+│  GET  /api/v1/articles/{id}/download → article_download.py  │
+│  GET  /api/v1/config               →  brand_config.py       │
+│  PUT  /api/v1/config               →  brand_config.py       │
+└──────────────┬──────────────────────────┬───────────────────┘
+               │                          │
+               │ Load BrandContext         │ GET / PUT brand config
+               ▼                          ▼
+     ┌─────────────────┐       ┌──────────────────────────┐
+     │  Layer B        │       │  public.tenant_brand_    │
+     │  PromptEngine   │◄─────►│  configs  (Supabase PG)  │
+     │                 │       │                          │
+     │  BrandContext:  │       │  persona, tone,          │
+     │  • persona      │       │  audience, pain_points,  │
+     │  • tone         │       │  reading_level, POV,     │
+     │  • audience     │       │  forbidden_phrases,      │
+     │  • pain_points  │       │  compliance_note         │
+     │  • reading_level│       └──────────────────────────┘
+     │  • POV          │
+     │  • forbidden    │
+     │  • compliance   │
+     └────────┬────────┘
+              │ brand_context passed into pipeline
+              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LangGraph Outer Shell  (article_graph.py)                  │
+│                                                             │
+│  crawl → create_request → [BLOG PIPELINE]                   │
+│       → qc → qc_fix? → zerogpt → zerogpt_fix? → finalize   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Blog Pipeline  (pipeline_runner.py)                        │
+│                                                             │
+│  PHASE 1A — Parallel                                        │
+│  ┌─────────────────┐   ┌──────────────────────────┐        │
+│  │  TopicAnalyst   │   │  EvidenceLocker           │        │
+│  │  themes, angles │   │  grounded facts from URLs │        │
+│  │  audience raw   │   │  dedup + quality filter   │        │
+│  └────────┬────────┘   └─────────────┬─────────────┘        │
+│           └─────────────┬────────────┘                      │
+│                         ▼                                   │
+│  PHASE 1B                                                   │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │  SectionPlanner                                   │       │
+│  │  Plans 6-8 sections with roles:                  │       │
+│  │    hook / body / transition / deepdive / faq     │       │
+│  │  ← brand_context.audience_context() injected     │       │
+│  └──────────────────────────────────────────────────┘       │
+│                         │                                   │
+│                         ▼                                   │
+│  PHASE 2 — Sequential (one section at a time)               │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │  SectionWriter  (× N sections)                   │       │
+│  │  Narrative continuity via prev_section_text      │       │
+│  │  system prompt = CORE_LAWS + brand voice_block() │       │
+│  │  Local QC gate per section (FK, AI patterns)     │       │
+│  └──────────────┬───────────────────────────────────┘       │
+│                 │ QC fail?                                   │
+│                 ▼                                           │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │  MiniHumanizer  (conditional)                    │       │
+│  │  Strips AI patterns, passive voice, filler       │       │
+│  └──────────────────────────────────────────────────┘       │
+│                         │                                   │
+│                         ▼                                   │
+│  PHASE 3 — Assembly (deterministic + 1 optional LLM expand) │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │  Assembler                                        │       │
+│  │  1. Join all sections                             │       │
+│  │  2. Expand 2 thin sections if < 1900 words       │       │
+│  │  3. Insert above-fold structure:                  │       │
+│  │     <!-- META: [hook first sentence] -->         │       │
+│  │     [hook paragraphs]                            │       │
+│  │     > Key Takeaways  (from section headings)     │       │
+│  │     In this article: TOC  (anchor links)         │       │
+│  │     [body sections...]                           │       │
+│  │     <!-- AUTHOR BIO: [...] -->                   │       │
+│  └──────────────────────────────────────────────────┘       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ draft_markdown
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LangGraph Post-Processing  (Layer D)                       │
+│                                                             │
+│  QC Gate      FK 5-12, FRE 50-75, word count 1900-3000     │
+│      └─► QC Fix        conditional LLM rewrite             │
+│                                                             │
+│  ZeroGPT Gate  AI score < 20%                              │
+│      └─► ZeroGPT Fix   surgical sentence-level humanization │
+│                                                             │
+│  Finalize     re-inject AUTHOR BIO if stripped by fixes     │
+│               save JSON artifact to GCS                    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+         GCS: gs://{bucket}/articles/{request_id}.json
+         { draft_markdown, title, word_count, section_meta, ... }
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Download  (article_download.py + docx_writer.py)           │
+│                                                             │
+│  Fetch GCS JSON → extract draft_markdown + title            │
+│  → markdown_to_docx():                                      │
+│     Mojibake cleanup (latin-1, cp1252 artifacts)            │
+│     Inline markdown → Word runs (bold, italic, code)        │
+│     Heading styles (H1/H2/H3), list styles, HR, blockquote │
+│     HTML comments (<!-- -->) stripped silently              │
+│  → Stream .docx attachment                                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -47,337 +149,190 @@ All artifacts stored in **Google Cloud Storage (GCS)**. Finance and audit logs i
 ## Quick Start
 
 ```powershell
-# Install dependencies
 cd "d:\Hare Krishna_ai_blog"
 pip install -r requirements.txt
-
-# Start the server
 uvicorn app.main:app --reload --port 8000
 ```
 
 ---
 
-## PowerShell Testing Commands (Full Pipeline)
+## API Reference
 
-### Step 1 — Login
+### Auth
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` | Register new user |
+| `POST` | `/api/v1/auth/login` | Login — returns JWT |
+| `POST` | `/api/v1/auth/forgot-password` | Send OTP email |
+| `POST` | `/api/v1/auth/reset-password` | Reset with OTP |
+| `GET` | `/api/v1/auth/me` | Current user info |
+
+### Brand Config (Layer B)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/config` | Get tenant brand config |
+| `PUT` | `/api/v1/config` | Save / update brand config |
+
+### Knowledge Base
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/kb` | Create knowledge base |
+| `GET` | `/api/v1/kb` | List knowledge bases |
+| `GET` | `/api/v1/kb/{kb_id}` | Get KB details |
+| `POST` | `/api/v1/kb/{kb_id}/ingest/file` | Upload PDF/DOCX |
+| `POST` | `/api/v1/kb/{kb_id}/ingest/url` | Ingest from URL |
+| `POST` | `/api/v1/kb/{kb_id}/preprocess/{doc_id}` | Extract + clean text |
+| `POST` | `/api/v1/kb/{kb_id}/chunk/{doc_id}` | Chunk text |
+| `POST` | `/api/v1/kb/{kb_id}/embed/{doc_id}` | Embed chunks (pgvector) |
+
+### Article Pipeline
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/articles/run` | Start pipeline (async) |
+| `GET` | `/api/v1/pipeline/{request_id}` | Poll pipeline status |
+| `GET` | `/api/v1/articles/requests/{id}/download` | Download Word (.docx) |
+
+---
+
+## PowerShell Testing Walkthrough
+
+### 1 — Login
 
 ```powershell
 $resp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/auth/login" `
   -Method POST -ContentType "application/json" `
-  -Body '{"tenant_id":"5ebc3c3a-5e0e-42a5-a350-76f1b792ac15","role":"tenant_admin"}'
+  -Body '{"email":"you@example.com","password":"yourpassword"}'
 $TOKEN = $resp.access_token
 $headers = @{ Authorization = "Bearer $TOKEN" }
-Write-Host "TOKEN ready: $($TOKEN.Substring(0,20))..."
 ```
 
----
-
-### Step 2 — Ingest Document
+### 2 — Set Brand Config (Layer B)
 
 ```powershell
-# Upload a DOCX/PDF to the Knowledge Base
-curl.exe -X POST "http://localhost:8000/api/v1/kb/69898811-3114-4dce-bebb-a7d2bb205b3d/ingest/file" `
-  -H "Authorization: Bearer $TOKEN" `
-  -F "file=@D:\path\to\document.docx"
-# Save the doc_id from the response
+Invoke-RestMethod -Method PUT -Uri "http://localhost:8000/api/v1/config" `
+  -Headers $headers -ContentType "application/json" `
+  -Body '{
+    "persona": "A knowledgeable but approachable health writer",
+    "tone_adjectives": ["clear", "evidence-aware", "non-preachy"],
+    "audience_primary": "health-conscious adults aged 28-45",
+    "audience_pain_points": ["poor sleep quality", "low energy", "brain fog"],
+    "reading_level": "grade 10-12",
+    "compliance_note": "Always include a consult-a-professional nudge."
+  }'
 ```
 
----
-
-### Step 3 — Preprocess → Chunk → Embed
+### 3 — Run Pipeline
 
 ```powershell
-$DOC_ID = "your-doc-id-here"
-$KB_ID  = "69898811-3114-4dce-bebb-a7d2bb205b3d"
+'{"title":"Why You Wake Up Tired Even After 8 Hours","keywords":["sleep quality","sleep stages","deep sleep"],"urls":["https://example.com/sleep-study"]}' `
+  | Out-File -Encoding utf8 body_run.json
 
-# Preprocess
-curl.exe -X POST "http://localhost:8000/api/v1/kb/$KB_ID/preprocess/$DOC_ID" `
-  -H "Authorization: Bearer $TOKEN"
-
-# Chunk
-curl.exe -X POST "http://localhost:8000/api/v1/kb/$KB_ID/chunk/$DOC_ID" `
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{}"
-
-# Embed
-curl.exe -X POST "http://localhost:8000/api/v1/kb/$KB_ID/embed/$DOC_ID" `
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{}"
+$run = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/v1/articles/run" `
+  -Headers $headers -ContentType "application/json" `
+  -InFile body_run.json
+$REQUEST_ID = $run.request_id
+Write-Host "Request ID: $REQUEST_ID"
 ```
 
----
-
-### Step 4 — Create Article Request
+### 4 — Poll Status
 
 ```powershell
-# Write JSON body to file (avoids PowerShell escaping issues)
-'{"kb_id":"69898811-3114-4dce-bebb-a7d2bb205b3d","title":"Your Article Title Here","keywords":["keyword1","keyword2","keyword3"]}' | Out-File -Encoding utf8 body.json
-
-curl.exe -X POST "http://localhost:8000/api/v1/articles/requests" `
-  -H "Authorization: Bearer $TOKEN" `
-  -H "Content-Type: application/json" -d "@body.json"
-# Save the request_id from the response
+do {
+  $status = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pipeline/$REQUEST_ID" -Headers $headers
+  Write-Host "$([datetime]::Now.ToString('HH:mm:ss'))  status=$($status.status)"
+  if ($status.status -notin @("running","pending")) { break }
+  Start-Sleep 10
+} while ($true)
 ```
 
----
-
-### Step 5 — Generate Draft (GPT-5.2, Outline-First)
+### 5 — Download Word Document
 
 ```powershell
-$REQUEST_ID = "your-request-id-here"
-
-# This calls GPT-5.2 twice: outline (~900 tokens) then full draft (~6000 tokens)
-curl.exe -X POST "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/run" `
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{}"
-# Takes 30-60 seconds
+$outFile = "outputs\article_$($REQUEST_ID.Substring(0,8)).docx"
+Invoke-RestMethod `
+  -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/download" `
+  -Headers $headers -OutFile $outFile
+Write-Host "Saved to $outFile"
 ```
 
 ---
 
-### Step 6 — QC Check
+## Brand Voice Layer (Layer B)
 
-```powershell
-$qcResp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/qc" -Headers $headers
-Write-Host "QC Pass: $($qcResp.qc_pass) | Words: $($qcResp.qc_metrics.word_count) | FRE: $($qcResp.qc_metrics.flesch_reading_ease) | FK: $($qcResp.qc_metrics.flesch_kincaid_grade) | FAQ: $($qcResp.qc_metrics.has_faq_section)"
+Every tenant can set a brand config that gets injected into every writing agent for every run.
+
+```json
+{
+  "persona": "A knowledgeable but approachable health writer",
+  "tone_adjectives": ["clear", "evidence-aware", "non-preachy"],
+  "audience_primary": "health-conscious adults aged 28-45",
+  "audience_pain_points": ["poor sleep quality", "low energy", "brain fog"],
+  "reading_level": "grade 10-12",
+  "preferred_pov": "second-person",
+  "forbidden_phrases": ["it's important to note", "in conclusion"],
+  "compliance_note": "Always include a consult-a-professional nudge."
+}
 ```
 
----
+**Where it gets injected:**
 
-### Step 7 — QC-Fix (if QC failed)
-
-```powershell
-$fixResp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/qc-fix" `
-  -Method POST -Headers $headers -ContentType "application/json" -Body '{}'
-Write-Host "QC Fix: $($fixResp.qc_pass) | Words: $($fixResp.final_word_count)"
-```
-
----
-
-### Step 8 — ZeroGPT AI Detection
-
-```powershell
-$zgResp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/zerogpt" -Headers $headers
-Write-Host "ZeroGPT Score: $($zgResp.zerogpt_score)% | Pass: $($zgResp.zerogpt_pass)"
-```
-
----
-
-### Step 9 — ZeroGPT Fix (Surgical Humanization)
-
-```powershell
-# Only needed if ZeroGPT score >= 20%
-$zgFixResp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/zerogpt-fix" `
-  -Method POST -Headers $headers -ContentType "application/json" -Body '{}'
-Write-Host "Score: $($zgFixResp.initial_score) -> $($zgFixResp.final_score) | Pass: $($zgFixResp.zerogpt_pass) | Attempts: $($zgFixResp.attempts_used)"
-```
-
----
-
-### Step 10 — Get Final Output
-
-```powershell
-$outputResp = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/articles/requests/$REQUEST_ID/output" -Headers $headers
-$outputResp | ConvertTo-Json -Depth 5
-```
-
----
-
-## Changes: v2 — GPT-5.2 Humanoid Upgrade (2026-03-04)
-
-### What Changed
-
-Upgraded from Groq (Kimi K2 / Llama 3.3) to **OpenAI GPT-5.2** with advanced anti-AI-detection prompt engineering.
-
-### Key Improvements
-
-| Metric | v1 (Groq) | v2 (GPT-5.2) |
-|---|---|---|
-| **ZeroGPT Score** | 77.5% (FAIL) | **15.1% (PASS)** |
-| **Draft Quality** | Needs 3-5 QC-fix rounds | Passes QC on first draft |
-| **ZeroGPT Fix** | Couldn't drop below 70% | **1 attempt** to pass |
-| **Total Tokens** | ~35,000 (28 iterations) | **~26,914** (draft + 1 fix) |
-| **Architecture** | Single-shot generation | **Outline-first** (2-call) |
-| **Writing Style** | Generic AI tone | **Humanoid** (burstiness + perplexity) |
-
-### Anti-AI-Detection Techniques
-
-The prompts use three key techniques that AI detectors look for:
-
-1. **Burstiness** — wildly varying sentence lengths (3 words then 22 words then 8 words). AI writes uniform-length sentences; humans don't.
-2. **Perplexity** — unexpected word choices ("wrecked" not "damaged", "wild" not "surprising"). AI picks the safest word; humans pick weird ones.
-3. **Personal Voice** — first-person opinions, mini-stories, casual fillers ("I think", "honestly", "in my experience"). AI never does this.
-
-Plus: fragments, dashes, ellipses, rhetorical questions, imperfect grammar, casual transitions.
-
-### Files Modified (v2)
-
-| File | Changes |
+| Agent | How |
 |---|---|
-| `requirements.txt` | Added `openai` package |
-| `app/api/article_run.py` | OpenAI GPT-5.2 + outline-first 2-call architecture + humanoid SYSTEM_PROMPT + anti-AI few-shot examples |
-| `app/api/article_qc.py` | Added FRE > 70 check + FAQ section check + updated thresholds (wc 1900-2600, FK 5-12) |
-| `app/api/article_revise.py` | `_llm_json()` router (OpenAI preferred, Groq fallback) + humanized expand/simplify prompts |
-| `app/api/article_zerogpt.py` | Threshold 10% → 20% |
-| `app/api/article_zerogpt_fix.py` | Fixed `h` field bug + `_humanize_llm()` router + aggressive anti-detection prompts with rotating techniques + auto-escalate surgical → full rewrite + temperature 0.9 |
-| `.env` | Added `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_MAX_TOKENS` |
+| SectionPlanner | `audience_context()` replaces raw TopicAnalyst audience in the user prompt |
+| SectionWriter | `voice_block()` appended to system prompt after Core Writing Laws |
+| Assembler | Title used for META comment generation |
 
-### Outline-First Architecture (Token Efficient)
+**What the Assembler adds (deterministic — no LLM):**
 
-```
-Call 1: Outline (~900 tokens)          → structured plan
-Call 2: Full Draft (~6000 tokens)      → guided by outline
-                                        ↓
-Total draft: ~7,000 tokens (vs ~12,000 single-shot)
-Prompt caching: same SYSTEM_PROMPT = 50% savings on input tokens
-```
+```markdown
+<!-- META: [first sentence of hook, 150-160 chars] -->
 
-### Surgical ZeroGPT Fix
+[hook paragraphs]
 
-```
-ZeroGPT API returns AI sentences in 'h' field
-                    ↓
-Rephrase ONLY flagged sentences (not full rewrite)
-                    ↓
-~600 tokens per fix (vs ~7,000 for full rewrite = 12x cheaper)
-                    ↓
-If surgical stalls → auto-escalates to full rewrite
+> **Key takeaways**
+> - Section heading 1
+> - Section heading 2
+> - Section heading 3
+
+**In this article:**
+- [Section 1](#anchor)
+- [Section 2](#anchor)
+...
+
+[body content]
+
+<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->
 ```
 
 ---
 
-## Changes: v1 — Pipeline Fix (2026-02-27 to 2026-03-01)
+## QC Thresholds
 
-### Problem Fixed
-
-The QC-fix loop was running 28+ iterations producing robotic text like *"A retry helps systems. It fixes failures."*
-
-### Root Causes
-
-| # | Root Cause | Fix |
+| Check | Gate | Method |
 |---|---|---|
-| 1 | `response_format: json_object` in Groq capped output at ~900 tokens | Removed JSON mode, plain text |
-| 2 | `_post_simplify()` converting commas to periods | Removed comma splitting |
-| 3 | Word replacement dict making bizarre substitutions | Reduced to 8 safe entries |
-| 4 | "No sentence longer than 12 words" rule | Removed aggressive limits |
-| 5 | No repetition/section checks in QC | Added checks |
-| 6 | Duplicate router registration | Removed duplicate |
+| Word count | 1900 – 3000 | Token split |
+| Flesch-Kincaid grade | 5.0 – 12.0 | textstat |
+| Flesch Reading Ease | 50 – 75 | textstat |
+| ZeroGPT AI score | < 20% | ZeroGPT API |
+| Section count | ≥ 6 | Heading regex |
+| FAQ section | Required | Heading regex |
 
 ---
 
-## Model Config (Current — v2)
+## Model Config
 
-| Step | Model | Provider | Notes |
-|---|---|---|---|
-| Draft generation | `gpt-5.2-2025-12-11` | OpenAI | Outline-first, 2-call, ~18K tokens |
-| QC-fix rewrites | `gpt-5.2-2025-12-11` | OpenAI | Falls back to Groq if no API key |
-| ZeroGPT humanize | `gpt-5.2-2025-12-11` | OpenAI | Surgical mode, temp 0.9 |
-| Embeddings | `gemini-embedding-001` | Gemini | 1536 dimensions |
-| Summarization | `gemini-2.5-flash` | Gemini | Standard pricing |
-| AI Detection | ZeroGPT API | ZeroGPT | Threshold < 20% |
-
----
-
-## QC Thresholds (Current — v2)
-
-| Check | Min | Max | Method |
-|---|---|---|---|
-| Word count | 1900 | 2600 | Simple split |
-| FK grade | 5.0 | 12.0 | textstat |
-| Flesch Reading Ease | 70.0 | — | textstat |
-| Repetition ratio | — | < 15% | Sentence Jaccard |
-| Unique sections | >= 6 | — | Heading count |
-| FAQ section | Required | — | Regex for `## FAQ` / `## Frequently Asked` |
-| ZeroGPT AI score | — | < 20% | ZeroGPT API |
-
----
-
-## Token Usage (Typical Run)
-
-| Step | Prompt | Output | Total |
-|---|---|---|---|
-| Draft (outline + article) | ~14,500 | ~4,300 | **~18,800** |
-| ZeroGPT Fix (1 attempt) | ~4,700 | ~3,400 | **~8,100** |
-| **Total** | **~19,200** | **~7,700** | **~26,900** |
-
-Cost: ~$0.17 per article (GPT-5.2 pricing)
-
----
-
-## Progress Tracker
-
-| Day | Deliverable | Status |
+| Step | Model | Provider |
 |---|---|---|
-| Day 1 | Repo setup · GCS buckets · `/health` endpoint | Done |
-| Day 2 | Cloud SQL/Supabase + pgvector · DB schemas · connectivity | Done |
-| Day 3 | Supabase finance/logs tables · usage_events · job_events | Done |
-| Day 4 | FastAPI JWT auth · tenant middleware · role checks · `/me` | Done |
-| Day 5 | Tenant creation · cost calculator · pricebook structure | Done |
-| Day 6 | KB CRUD (create/list/get/delete) · budget structure | Done |
-| Day 7 | File ingestion → GCS raw → fingerprint → DB document row | Done |
-| Day 8 | URL ingestion · BFS crawler · robots.txt · rate-limit | Done |
-| Day 9 | Cache registry · global vs tenant-private scope · cache-hit reuse | Done |
-| Day 10 | Ingestion job tracking · job_events · SSE status streaming | Done |
-| Day 11 | Preprocessing · extraction + cleaning · clean_text in GCS | Done |
-| Day 12 | Dynamic chunker · recursive + sliding overlap · chunk metadata | Done |
-| Day 13 | Gemini summaries + entities · usage token cost logging | Done |
-| Day 14 | Gemini embeddings · pgvector upsert · top_k retrieval | Done |
-| Day 15 | Hybrid retrieval · vector + keyword + entity boost · retrieval cache | Done |
-| Day 16 | Article request queue · locking · FastAPI create/list/get endpoints | Done |
-| Day 17 | Draft generation · GPT-5.2 · outline-first · GCS storage | Done |
-| Day 18 | Retry loop · attempt management · job state transitions | Done |
-| Day 19 | Local QC · word count + FRE + FK + repetition + sections + FAQ | Done |
-| Day 20 | ZeroGPT integration · score + surgical fix · humanization loop | Done |
-| Day 21 | Full pipeline tested: ZeroGPT 15.1%, FRE 72, 2536 words | Done |
-| Day 22 | Stale lock sweeper + recovery | Pending |
-| Day 23 | Deployment hardening · services · restart policies · structured logs | Pending |
-| Day 24 | Load testing · DB index tuning · retrieval performance | Pending |
-| Day 25 | Final deployment + runbook · end-to-end demo · sign-off checklist | Pending |
-
-**21 of 25 days complete.**
-
----
-
-## Required `.env` Variables
-
-```env
-# App
-APP_NAME=Sighnal
-API_HOST=127.0.0.1
-API_PORT=8000
-
-# Auth
-JWT_SECRET_KEY=your-strong-random-secret-64chars
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=720
-
-# GCS
-GCP_PROJECT_ID=your-gcp-project-id
-GCS_BUCKET_NAME=your-bucket-name
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-
-# Supabase Postgres
-DB_HOST=your-supabase-pooler-host
-DB_PORT=6543
-DB_NAME=postgres
-DB_USER=postgres.your-project-ref
-DB_PASSWORD=your-db-password
-DB_SSLMODE=require
-
-# Gemini
-GEMINI_API_KEY=your-gemini-key
-GEMINI_MODEL_DRAFT=gemini-2.5-flash
-GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-
-# OpenAI (GPT-5.2 — primary article LLM)
-OPENAI_API_KEY=your-openai-key
-OPENAI_MODEL=gpt-5.2-2025-12-11
-OPENAI_MAX_TOKENS=16384
-
-# Groq (fallback LLM)
-GROQ_API_KEY=your-groq-key
-
-# ZeroGPT
-ZEROGPT_API_KEY=your-zerogpt-key
-ZEROGPT_BASE_URL=https://api.zerogpt.com
-```
+| Draft + QC-fix | `gpt-5.2-2025-12-11` | OpenAI |
+| ZeroGPT humanization | `gpt-5.2-2025-12-11` | OpenAI |
+| Section expand (assembler) | `gpt-5.2-2025-12-11` | OpenAI |
+| Embeddings | `gemini-embedding-001` | Gemini |
+| Summarization | `gemini-2.5-flash` | Gemini |
+| AI Detection | ZeroGPT API | ZeroGPT |
 
 ---
 
@@ -386,6 +341,7 @@ ZEROGPT_BASE_URL=https://api.zerogpt.com
 | Table | Purpose |
 |---|---|
 | `public.tenants_fin` | Multi-tenant registry |
+| `public.tenant_brand_configs` | Per-tenant brand voice config (Layer B) |
 | `public.knowledge_bases` | KB metadata per tenant |
 | `public.documents` | Ingested document records |
 | `public.job_events` | Audit log for all pipeline steps |
@@ -397,3 +353,131 @@ ZEROGPT_BASE_URL=https://api.zerogpt.com
 | `public.retrieval_cache` | Hybrid search cache (TTL=24h) |
 | `public.cache_registry` | File dedup cache across docs |
 | `public.article_requests` | Article generation queue |
+
+---
+
+## Required `.env` Variables
+
+```env
+# App
+APP_NAME=Sighnal
+API_HOST=127.0.0.1
+API_PORT=8000
+LOG_LEVEL=INFO
+
+# Auth
+JWT_SECRET_KEY=your-strong-random-secret-64chars
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=720
+CORS_ALLOW_ORIGINS=http://localhost:3000
+
+# GCS
+GCP_PROJECT_ID=your-gcp-project-id
+GCS_BUCKET_NAME=your-bucket-name
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+GCS_RAW_PREFIX=raw
+GCS_PROCESSED_PREFIX=processed
+GCS_ARTICLES_PREFIX=articles
+
+# Supabase Postgres (direct connection — port 5432)
+DB_HOST=db.your-project-ref.supabase.co
+DB_PORT=5432
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASSWORD=your-db-password
+DB_SSLMODE=require
+
+# OpenAI (primary article LLM)
+OPENAI_API_KEY=your-openai-key
+OPENAI_MODEL=gpt-5.2-2025-12-11
+OPENAI_MAX_TOKENS=16384
+
+# Gemini
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL_DRAFT=gemini-2.5-flash
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+
+# Groq (fallback LLM)
+GROQ_API_KEY=your-groq-key
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# Tavily (topic → URL discovery)
+TAVILY_API_KEY=your-tavily-key
+
+# ZeroGPT
+ZEROGPT_API_KEY=your-zerogpt-key
+ZEROGPT_BASE_URL=https://api.zerogpt.com
+ZEROGPT_ENDPOINT_PATH=/api/detect/detectText
+
+# QC thresholds
+BLOG_WORDCOUNT_MIN=1950
+BLOG_WORDCOUNT_MAX=2050
+READABILITY_MIN_GRADE=7.0
+READABILITY_MAX_GRADE=9.0
+
+# SMTP (Gmail primary / Brevo fallback)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-gmail@gmail.com
+SMTP_PASS=your-app-password
+FRONTEND_URL=http://localhost:3000
+```
+
+---
+
+## Key Files
+
+```
+app/
+├── main.py                                  FastAPI app + router registration
+├── api/
+│   ├── article_run.py                       POST /articles/run  (pipeline trigger)
+│   ├── article_download.py                  GET  /articles/{id}/download
+│   ├── brand_config.py                      GET/PUT /config  (Layer B API)
+│   └── ...
+├── services/
+│   ├── article_graph.py                     LangGraph outer shell
+│   ├── docx_writer.py                       Shared markdown → Word converter
+│   └── blog_pipeline/
+│       ├── pipeline_runner.py               Multi-agent orchestrator
+│       ├── prompt_engine.py                 Layer B — BrandContext + DB helpers
+│       ├── agent_topic_analyst.py           Phase 1A — topic analysis
+│       ├── agent_evidence_locker.py         Phase 1A — fact extraction
+│       ├── agent_section_planner.py         Phase 1B — section planning
+│       ├── agent_section_writer.py          Phase 2  — section writing
+│       ├── agent_mini_humanize.py           Phase 2  — conditional humanizer
+│       ├── assembler.py                     Phase 3  — join + structure
+│       └── gates_local_qc.py               Per-section QC gate
+```
+
+---
+
+## Changelog
+
+### v4 — Brand Voice Layer (2026-05-07)
+- **Layer B (PromptEngine)** — per-tenant `BrandContext` loaded from DB, injected into SectionPlanner + SectionWriter + Assembler
+- **Brand Config API** — `GET/PUT /api/v1/config` → `public.tenant_brand_configs`
+- **Above-fold structure** — Assembler now adds META comment, Key Takeaways block, TOC, and AUTHOR BIO placeholder deterministically (no LLM)
+- **AUTHOR BIO safety net** — finalize node re-injects if stripped by downstream QC/ZeroGPT fix passes
+- **Download endpoint fixes** — SQL `topic` → `title` column; dual GCS JSON shape support (blog vs legacy)
+- **docx_writer** — strips `<!-- ... -->` HTML comments so metadata never leaks into Word output
+
+### v3 — Pipeline Hardening (2026-04-26)
+- Watchdog timer (15 min max per run)
+- NameError fix in finalize_node
+- DDL guard on GET poll endpoint
+- Concurrent pipeline limit (max 2 per tenant)
+- Multi-URL support (up to 8 URLs per run)
+- Word document download endpoint + shared `docx_writer` service
+
+### v2 — Multi-Agent Rewrite (2026-04-23)
+- Replaced single-shot GPT prompt with 6-agent LangGraph pipeline
+- Added EvidenceLocker, SectionPlanner, MiniHumanizer, Assembler agents
+- Per-section local QC gate (FK + AI pattern detection)
+- 5 pipeline bugs fixed: encoding, critique truncation, grounding ratio, retrieval noise, content dedup
+
+### v1 — GPT-5.2 Humanoid Draft (2026-03-04)
+- Upgraded from Groq to OpenAI GPT-5.2
+- Outline-first 2-call architecture
+- Burstiness + perplexity anti-AI-detection techniques
+- ZeroGPT 77.5% → 15.1% on first run

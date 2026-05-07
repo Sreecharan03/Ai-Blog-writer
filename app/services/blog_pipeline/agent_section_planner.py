@@ -6,10 +6,11 @@ Every other agent depends on its output — it defines the contract.
 from __future__ import annotations
 import json
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 from .prompts import SECTION_PLANNER_SYSTEM, SECTION_PLANNER_USER
+from .prompt_engine import BrandContext
 
 _ROLE_TARGET_WORDS = {
     "hook": 185,
@@ -92,17 +93,26 @@ def plan_sections(
     target_words: int = 2000,
     temperature: float = 0.2,
     max_tokens: int = 1200,
+    brand_context: Optional[BrandContext] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Returns (sections_list, usage).
     Falls back to deterministic plan if LLM fails.
     """
     arc = analysis.get("arc", "narrative")
+
+    # Enrich audience signal: prefer brand config over TopicAnalyst inference
+    audience_str = analysis.get("audience", "general reader")
+    if brand_context:
+        brand_audience = brand_context.audience_context()
+        if brand_audience:
+            audience_str = brand_audience
+
     user = SECTION_PLANNER_USER.format(
         title=title,
         content_type=analysis.get("content_type", "explainer"),
         arc=arc,
-        audience=analysis.get("audience", "general reader"),
+        audience=audience_str,
         primary_angle=analysis.get("primary_angle", ""),
         counterargument_seed=analysis.get("counterargument_seed", ""),
         hook_seed=analysis.get("hook_seed", ""),

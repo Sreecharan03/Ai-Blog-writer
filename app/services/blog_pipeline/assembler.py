@@ -1,6 +1,7 @@
 """
 Assembler — Phase 3.
-No LLM. Deterministic joining, word count check, targeted expand if short.
+Deterministic joining, word count check, targeted expand if short.
+Also adds above-fold structure: META comment, Key Takeaways, TOC, Author Bio.
 """
 from __future__ import annotations
 import re
@@ -8,10 +9,100 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 from .gates_local_qc import word_count
+from .prompt_engine import BrandContext
 
 MIN_WORDS = 1900
 MAX_WORDS = 2600
 MIN_SECTION_WORDS = 180
+
+
+def _build_meta_comment(title: str, hook_text: str) -> str:
+    """Generate a 150-160 char META comment from the hook's opening sentence."""
+    first_sent = ""
+    if hook_text:
+        # Take up to the first sentence-ending punctuation
+        m = re.search(r"[.!?]", hook_text)
+        first_sent = hook_text[: m.end()].strip() if m else hook_text[:150].strip()
+    meta = first_sent or title
+    if len(meta) > 157:
+        meta = meta[:154] + "..."
+    return f"<!-- META: {meta} -->"
+
+
+def _build_key_takeaways(sections: List[Dict[str, Any]]) -> str:
+    """Build a Key Takeaways block from section headings (non-hook, non-faq)."""
+    headings = [
+        s.get("heading")
+        for s in sections
+        if s.get("heading") and s.get("role") not in ("hook", "faq")
+    ]
+    if len(headings) < 2:
+        return ""
+    picks = headings[:5]
+    lines = ["> **Key takeaways**"]
+    for h in picks:
+        lines.append(f"> - {h}")
+    return "\n".join(lines)
+
+
+def _build_toc(sections: List[Dict[str, Any]]) -> str:
+    """Build an 'In this article' TOC from H2 headings."""
+    headings = [
+        s.get("heading")
+        for s in sections
+        if s.get("heading") and s.get("role") != "hook"
+    ]
+    if len(headings) < 3:
+        return ""
+    lines = ["**In this article:**"]
+    for h in headings:
+        anchor = re.sub(r"[^a-z0-9\s-]", "", h.lower()).strip().replace(" ", "-")
+        lines.append(f"- [{h}](#{anchor})")
+    return "\n".join(lines)
+
+
+def _insert_above_fold(
+    assembled: str,
+    sections: List[Dict[str, Any]],
+    title: str,
+) -> str:
+    """
+    Wrap the assembled markdown with:
+      <!-- META: ... -->
+      [hook paragraphs]
+      > Key Takeaways
+      In this article TOC
+      [rest of article]
+      <!-- AUTHOR BIO: ... -->
+    """
+    # Split at first H2/H3 heading — everything before it is the hook
+    m = re.search(r"^#{1,3}\s+", assembled, re.MULTILINE)
+    if not m:
+        # No headings — return as-is with just meta + author bio
+        hook_section = next((s for s in sections if s.get("role") == "hook"), None)
+        hook_text = hook_section.get("text", "") if hook_section else assembled
+        meta = _build_meta_comment(title, hook_text)
+        return f"{meta}\n\n{assembled}\n\n<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
+
+    hook_part = assembled[: m.start()].rstrip()
+    rest = assembled[m.start():]
+
+    hook_section = next((s for s in sections if s.get("role") == "hook"), None)
+    hook_text = hook_section.get("text", "") if hook_section else hook_part
+
+    meta = _build_meta_comment(title, hook_text)
+    takeaways = _build_key_takeaways(sections)
+    toc = _build_toc(sections)
+    author_bio = "<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
+
+    parts = [meta, "", hook_part]
+    if takeaways:
+        parts += ["", takeaways]
+    if toc:
+        parts += ["", toc]
+    parts += ["", rest, "", author_bio]
+
+    return "\n".join(parts)
 
 
 def _join(sections: List[Dict[str, Any]]) -> str:
@@ -94,9 +185,12 @@ def assemble(
     facts: List[Dict[str, Any]],
     target_words: int = 2000,
     max_tokens_per_expand: int = 500,
+    title: str = "",
+    brand_context: Optional[BrandContext] = None,
 ) -> Tuple[str, int, Dict[str, int]]:
     """
     Join sections, check word count, expand if short (max 2 targeted LLM calls).
+    Adds META comment, Key Takeaways, TOC, and Author Bio placeholder.
     Returns (markdown, final_word_count, usage).
     """
     total_usage: Dict[str, int] = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -119,6 +213,9 @@ def assemble(
 
         assembled = _join(sections)
         wc = word_count(assembled)
+
+    # Add above-fold structure (no LLM — deterministic)
+    assembled = _insert_above_fold(assembled, sections, title or "")
 
     return assembled, wc, total_usage
 

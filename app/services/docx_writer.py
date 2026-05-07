@@ -135,6 +135,10 @@ def markdown_to_docx(
         if not stripped:
             continue
 
+        # Strip CMS metadata comments — they belong in the CMS, not the Word doc
+        if stripped.startswith('<!--') and stripped.endswith('-->'):
+            continue
+
         if stripped.startswith('### '):
             h = re.sub(r'\*+(.+?)\*+', r'\1', clean(stripped[4:]))
             doc.add_heading(h, level=3)

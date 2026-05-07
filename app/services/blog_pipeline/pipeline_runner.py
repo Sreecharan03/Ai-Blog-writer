@@ -22,6 +22,7 @@ from .agent_section_writer import write_section
 from .agent_mini_humanize import humanize_section
 from .assembler import assemble, section_count, has_faq
 from .gates_local_qc import word_count, run_local_qc
+from .prompt_engine import BrandContext
 
 MAX_SECTION_TOKENS = 750
 MAX_ASSEMBLE_EXPAND_TOKENS = 500
@@ -43,6 +44,7 @@ def run_blog_pipeline(
     keywords: List[str],
     sources: List[Dict[str, Any]],
     target_words: int = 2000,
+    brand_context: Optional[BrandContext] = None,
 ) -> Dict[str, Any]:
     """
     Full pipeline. Returns result dict with:
@@ -70,6 +72,7 @@ def run_blog_pipeline(
     sections, planner_usage = plan_sections(
         client, model, title, analysis, facts,
         sparse=is_sparse, target_words=target_words,
+        brand_context=brand_context,
     )
     all_usage = _sum_usage(all_usage, planner_usage)
 
@@ -89,6 +92,7 @@ def run_blog_pipeline(
             sparse=is_sparse,
             prev_section_text=prev_text,
             max_tokens=MAX_SECTION_TOKENS,
+            brand_context=brand_context,
         )
         all_usage = _sum_usage(all_usage, writer_usage)
 
@@ -127,6 +131,8 @@ def run_blog_pipeline(
         client, model, written_sections, facts,
         target_words=target_words,
         max_tokens_per_expand=MAX_ASSEMBLE_EXPAND_TOKENS,
+        title=title,
+        brand_context=brand_context,
     )
     all_usage = _sum_usage(all_usage, assemble_usage)
 
