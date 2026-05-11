@@ -141,12 +141,15 @@ def markdown_to_docx(
 
         if stripped.startswith('### '):
             h = re.sub(r'\*+(.+?)\*+', r'\1', clean(stripped[4:]))
+            h = re.sub(r'\s*\{#[^}]+\}', '', h)
             doc.add_heading(h, level=3)
         elif stripped.startswith('## '):
             h = re.sub(r'\*+(.+?)\*+', r'\1', clean(stripped[3:]))
+            h = re.sub(r'\s*\{#[^}]+\}', '', h)
             doc.add_heading(h, level=2)
         elif stripped.startswith('# '):
             h = re.sub(r'\*+(.+?)\*+', r'\1', clean(stripped[2:]))
+            h = re.sub(r'\s*\{#[^}]+\}', '', h)
             doc.add_heading(h, level=1)
         elif re.match(r'^-{3,}$', stripped) or re.match(r'^\*{3,}$', stripped):
             _add_hr(doc)

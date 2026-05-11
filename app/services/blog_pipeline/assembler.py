@@ -20,7 +20,6 @@ def _build_meta_comment(title: str, hook_text: str) -> str:
     """Generate a 150-160 char META comment from the hook's opening sentence."""
     first_sent = ""
     if hook_text:
-        # Take up to the first sentence-ending punctuation
         m = re.search(r"[.!?]", hook_text)
         first_sent = hook_text[: m.end()].strip() if m else hook_text[:150].strip()
     meta = first_sent or title
@@ -29,34 +28,69 @@ def _build_meta_comment(title: str, hook_text: str) -> str:
     return f"<!-- META: {meta} -->"
 
 
+def _build_disclaimer_comment(brand_context: Optional["BrandContext"]) -> str:
+    """Generate a DISCLAIMER comment if the tenant has set disclaimer text."""
+    if not brand_context:
+        return ""
+    text = (brand_context.disclaimer or "").strip()
+    if not text:
+        return ""
+    return f"<!-- DISCLAIMER: {text} -->"
+
+
 def _build_key_takeaways(sections: List[Dict[str, Any]]) -> str:
-    """Build a Key Takeaways block from section headings (non-hook, non-faq)."""
+    """Build a Key Takeaways block from section headings (non-hook, non-faq, non-closing).
+    Filters out parenthetical/conditional headings that don't read as insights.
+    Uses plain bold + bullets (not blockquote) to match CMS rendering expectations.
+    """
     headings = [
         s.get("heading")
         for s in sections
-        if s.get("heading") and s.get("role") not in ("hook", "faq")
+        if s.get("heading")
+        and s.get("role") not in ("hook", "faq", "closing")
+        and "(" not in s.get("heading", "")
+        and len(s.get("heading", "")) <= 65
     ]
     if len(headings) < 2:
         return ""
-    picks = headings[:5]
-    lines = ["> **Key takeaways**"]
+    picks = headings[:4]
+    lines = ["**Key takeaways**", ""]
     for h in picks:
-        lines.append(f"> - {h}")
+        lines.append(f"- {h}")
     return "\n".join(lines)
 
 
+def _add_anchors_to_headings(markdown: str) -> str:
+    """Add {#anchor-id} to all H2/H3 headings for CMS compatibility (Hugo, Jekyll, etc.)."""
+    def make_anchor(text: str) -> str:
+        anchor = re.sub(r"[^a-z0-9\s-]", "", text.lower()).strip()
+        anchor = re.sub(r"\s+", "-", anchor)
+        anchor = re.sub(r"-+", "-", anchor).strip("-")
+        return anchor[:60]
+
+    def replace_heading(m: re.Match) -> str:
+        hashes = m.group(1)
+        text = m.group(2).strip()
+        if "{#" in text:
+            return m.group(0)
+        return f"{hashes} {text} {{#{make_anchor(text)}}}"
+
+    return re.sub(r"^(#{2,3})\s+(.+)$", replace_heading, markdown, flags=re.MULTILINE)
+
+
 def _build_toc(sections: List[Dict[str, Any]]) -> str:
-    """Build an 'In this article' TOC from H2 headings."""
+    """Build an 'In this article' TOC from H2 headings (excludes hook and closing)."""
     headings = [
         s.get("heading")
         for s in sections
-        if s.get("heading") and s.get("role") != "hook"
+        if s.get("heading") and s.get("role") not in ("hook", "closing")
     ]
     if len(headings) < 3:
         return ""
-    lines = ["**In this article:**"]
+    lines = ["**In this article:**", ""]
     for h in headings:
         anchor = re.sub(r"[^a-z0-9\s-]", "", h.lower()).strip().replace(" ", "-")
+        anchor = re.sub(r"-+", "-", anchor).strip("-")
         lines.append(f"- [{h}](#{anchor})")
     return "\n".join(lines)
 
@@ -65,24 +99,36 @@ def _insert_above_fold(
     assembled: str,
     sections: List[Dict[str, Any]],
     title: str,
+    brand_context: Optional["BrandContext"] = None,
 ) -> str:
     """
     Wrap the assembled markdown with:
       <!-- META: ... -->
+      <!-- DISCLAIMER: ... -->   (only if brand_context.disclaimer is set)
       [hook paragraphs]
-      > Key Takeaways
+      Key Takeaways (bold heading + plain bullets)
       In this article TOC
       [rest of article]
       <!-- AUTHOR BIO: ... -->
     """
-    # Split at first H2/H3 heading — everything before it is the hook
+    author_bio = (
+        "<!-- AUTHOR BIO: [Author full name] | "
+        "[Credentials / professional designation — e.g. MD, CFP, PhD, RD] | "
+        "[Affiliation or institution — fill before publishing] -->"
+    )
+
+    # Split at first H2/H3 heading — everything before is the hook
     m = re.search(r"^#{1,3}\s+", assembled, re.MULTILINE)
     if not m:
-        # No headings — return as-is with just meta + author bio
         hook_section = next((s for s in sections if s.get("role") == "hook"), None)
         hook_text = hook_section.get("text", "") if hook_section else assembled
         meta = _build_meta_comment(title, hook_text)
-        return f"{meta}\n\n{assembled}\n\n<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
+        disclaimer = _build_disclaimer_comment(brand_context)
+        parts = [meta]
+        if disclaimer:
+            parts.append(disclaimer)
+        parts += ["", assembled, "", author_bio]
+        return "\n".join(parts)
 
     hook_part = assembled[: m.start()].rstrip()
     rest = assembled[m.start():]
@@ -91,11 +137,14 @@ def _insert_above_fold(
     hook_text = hook_section.get("text", "") if hook_section else hook_part
 
     meta = _build_meta_comment(title, hook_text)
+    disclaimer = _build_disclaimer_comment(brand_context)
     takeaways = _build_key_takeaways(sections)
     toc = _build_toc(sections)
-    author_bio = "<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
 
-    parts = [meta, "", hook_part]
+    parts = [meta]
+    if disclaimer:
+        parts.append(disclaimer)
+    parts += ["", hook_part]
     if takeaways:
         parts += ["", takeaways]
     if toc:
@@ -214,8 +263,11 @@ def assemble(
         assembled = _join(sections)
         wc = word_count(assembled)
 
+    # Add CMS anchor IDs to all H2/H3 headings
+    assembled = _add_anchors_to_headings(assembled)
+
     # Add above-fold structure (no LLM — deterministic)
-    assembled = _insert_above_fold(assembled, sections, title or "")
+    assembled = _insert_above_fold(assembled, sections, title or "", brand_context=brand_context)
 
     return assembled, wc, total_usage
 

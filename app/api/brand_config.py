@@ -131,8 +131,13 @@ class BrandConfigIn(BaseModel):
     )
     compliance_note: str = Field(
         default="",
-        description="Sector compliance note appended to every article. E.g. 'Always include a consult-a-professional nudge.'",
+        description="Internal writer instruction for compliance. E.g. 'Mention professional advice only once, in FAQ.'",
         max_length=500,
+    )
+    disclaimer: str = Field(
+        default="",
+        description="Domain-specific legal disclaimer rendered as <!-- DISCLAIMER: ... --> at article top. E.g. 'This article is for educational purposes only and does not constitute financial advice.'",
+        max_length=1000,
     )
 
 
@@ -173,6 +178,7 @@ def get_brand_config(claims: Claims = Depends(require_claims)):
             language="en",
             preferred_pov="second-person",
             compliance_note="",
+            disclaimer="",
         )
 
     return BrandConfigOut(
@@ -186,6 +192,7 @@ def get_brand_config(claims: Claims = Depends(require_claims)):
         language=row.get("language") or "en",
         preferred_pov=row.get("preferred_pov") or "second-person",
         compliance_note=row.get("compliance_note") or "",
+        disclaimer=row.get("disclaimer") or "",
         created_at=str(row["created_at"]) if row.get("created_at") else None,
         updated_at=str(row["updated_at"]) if row.get("updated_at") else None,
     )
@@ -211,6 +218,7 @@ def put_brand_config(
         language=body.language,
         preferred_pov=body.preferred_pov,
         compliance_note=body.compliance_note,
+        disclaimer=body.disclaimer,
     )
 
     settings = get_settings()

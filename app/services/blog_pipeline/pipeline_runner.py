@@ -19,6 +19,7 @@ from .agent_topic_analyst import analyze_topic
 from .agent_evidence_locker import build_evidence_locker
 from .agent_section_planner import plan_sections
 from .agent_section_writer import write_section
+from .agent_tone_reviewer import review_section_tone
 from .agent_mini_humanize import humanize_section
 from .assembler import assemble, section_count, has_faq
 from .gates_local_qc import word_count, run_local_qc
@@ -95,6 +96,12 @@ def run_blog_pipeline(
             brand_context=brand_context,
         )
         all_usage = _sum_usage(all_usage, writer_usage)
+
+        # Tone review: remove compliance nudges from body sections, warm up cold endings
+        text, _tone_changed, tone_usage = review_section_tone(
+            client, model, text, role=role, brand_context=brand_context,
+        )
+        all_usage = _sum_usage(all_usage, tone_usage)
 
         humanized = False
         humanize_usage: Dict[str, int] = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}

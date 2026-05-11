@@ -19,12 +19,19 @@ from typing import Any, List, Optional
 # Smart defaults — what a tenant gets before they configure anything
 # ─────────────────────────────────────────────────────────────────────────────
 _DEFAULT_PERSONA = (
-    "A knowledgeable but approachable writer — like a smart friend who happens "
-    "to have deep expertise in the subject. Confident. Never preachy."
+    "A warm, trusted friend who happens to have deep expertise in the subject. "
+    "Writes with empathy first, evidence second. Understands the reader's frustration "
+    "before explaining the science. Confident, never clinical, never preachy. "
+    "Leaves every section with the reader feeling equipped and curious — not anxious."
 )
-_DEFAULT_TONE = ["clear", "evidence-aware", "direct", "non-preachy"]
-_DEFAULT_READING_LEVEL = "grade 10-12"
+_DEFAULT_TONE = ["warm", "encouraging", "plain-spoken", "evidence-aware", "non-preachy"]
+_DEFAULT_READING_LEVEL = "grade 8-10"
 _DEFAULT_POV = "second-person"
+_DEFAULT_COMPLIANCE = (
+    "If professional advice is relevant, mention it ONCE — in the FAQ section only, "
+    "for a single Q&A where it is genuinely needed. Never in body sections."
+)
+_DEFAULT_DISCLAIMER = ""   # Empty by default — tenant sets domain-specific legal text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +47,8 @@ class BrandContext:
     reading_level: str = _DEFAULT_READING_LEVEL
     language: str = "en"
     preferred_pov: str = _DEFAULT_POV
-    compliance_note: str = ""
+    compliance_note: str = _DEFAULT_COMPLIANCE
+    disclaimer: str = _DEFAULT_DISCLAIMER
 
     def is_configured(self) -> bool:
         """True when a tenant has explicitly saved their config."""
@@ -112,15 +120,23 @@ CREATE TABLE IF NOT EXISTS public.tenant_brand_configs (
     language           TEXT        NOT NULL DEFAULT 'en',
     preferred_pov      TEXT        NOT NULL DEFAULT 'second-person',
     compliance_note    TEXT        NOT NULL DEFAULT '',
+    disclaimer         TEXT        NOT NULL DEFAULT '',
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
+
+# Idempotent migration — adds columns introduced after the initial table creation
+_MIGRATE_SQL = """
+ALTER TABLE public.tenant_brand_configs
+    ADD COLUMN IF NOT EXISTS disclaimer TEXT NOT NULL DEFAULT '';
 """
 
 
 def _ensure_table(conn: Any) -> None:
     with conn.cursor() as cur:
         cur.execute(_CREATE_TABLE_SQL)
+        cur.execute(_MIGRATE_SQL)
     conn.commit()
 
 
@@ -153,7 +169,8 @@ def load_brand_context(conn: Any, tenant_id: str) -> BrandContext:
         reading_level=row.get("reading_level") or _DEFAULT_READING_LEVEL,
         language=row.get("language") or "en",
         preferred_pov=row.get("preferred_pov") or _DEFAULT_POV,
-        compliance_note=row.get("compliance_note") or "",
+        compliance_note=row.get("compliance_note") or _DEFAULT_COMPLIANCE,
+        disclaimer=row.get("disclaimer") or _DEFAULT_DISCLAIMER,
     )
 
 
@@ -166,9 +183,9 @@ def upsert_brand_context(conn: Any, tenant_id: str, ctx: BrandContext) -> None:
             INSERT INTO public.tenant_brand_configs
                 (tenant_id, persona, tone_adjectives, forbidden_phrases,
                  audience_primary, audience_pain_points, reading_level,
-                 language, preferred_pov, compliance_note, updated_at)
+                 language, preferred_pov, compliance_note, disclaimer, updated_at)
             VALUES
-                (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
             ON CONFLICT (tenant_id) DO UPDATE SET
                 persona            = EXCLUDED.persona,
                 tone_adjectives    = EXCLUDED.tone_adjectives,
@@ -179,6 +196,7 @@ def upsert_brand_context(conn: Any, tenant_id: str, ctx: BrandContext) -> None:
                 language           = EXCLUDED.language,
                 preferred_pov      = EXCLUDED.preferred_pov,
                 compliance_note    = EXCLUDED.compliance_note,
+                disclaimer         = EXCLUDED.disclaimer,
                 updated_at         = now()
             """,
             (
@@ -192,6 +210,7 @@ def upsert_brand_context(conn: Any, tenant_id: str, ctx: BrandContext) -> None:
                 ctx.language,
                 ctx.preferred_pov,
                 ctx.compliance_note,
+                ctx.disclaimer,
             ),
         )
     conn.commit()

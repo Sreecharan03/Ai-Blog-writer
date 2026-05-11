@@ -21,10 +21,11 @@ _ROLE_TARGET_WORDS = {
     "counterargument": 240,
     "conclusion": 200,
     "faq": 180,
+    "closing": 90,
 }
 
-_NARRATIVE_ARC = ["hook", "context", "evidence", "evidence", "opinion", "counterargument", "conclusion", "faq"]
-_INSTRUCTIONAL_ARC = ["hook", "context", "evidence", "practical", "practical", "counterargument", "conclusion", "faq"]
+_NARRATIVE_ARC = ["hook", "context", "evidence", "evidence", "opinion", "counterargument", "conclusion", "faq", "closing"]
+_INSTRUCTIONAL_ARC = ["hook", "context", "evidence", "practical", "practical", "counterargument", "conclusion", "faq", "closing"]
 
 
 def _fallback_plan(arc: str, facts: List[Dict], target_words: int) -> List[Dict[str, Any]]:

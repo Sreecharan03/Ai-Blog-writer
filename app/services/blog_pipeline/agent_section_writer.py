@@ -27,6 +27,7 @@ def _build_facts_block(facts: List[Dict[str, Any]], assigned_ids: List[str], spa
         assigned = facts[:8]
     lines = [
         f"- [{f['fact_id']}] ({f.get('confidence','medium')}) {f['claim']}"
+        + (" [VERIFY]" if f.get("confidence") == "low" else "")
         for f in assigned
     ]
     if sparse:
@@ -35,10 +36,23 @@ def _build_facts_block(facts: List[Dict[str, Any]], assigned_ids: List[str], spa
 
 
 def _format_instruction(role: str, heading: Optional[str]) -> str:
+    if role == "closing":
+        return (
+            "Plain markdown paragraphs only. No heading. 2-4 sentences maximum. "
+            "A strong, forward-looking observation that crystallizes the article's single most important insight — "
+            "without summarizing the sections, without starting with 'In conclusion', 'Ultimately', or 'At the end of the day'. "
+            "The reader should feel resolved and clear-headed. End on action or truth, not caution."
+        )
     if role == "hook":
         return "Plain markdown paragraphs only. No heading line."
     if role == "faq":
-        return "## FAQ\n\nMarkdown with **bold question** on its own line, then answer paragraph. 5-7 Q&A pairs. Always start with the heading `## FAQ` on the first line."
+        h = heading or "FAQ"
+        return (
+            f"Start output with: ## {h}\n\n"
+            "Then write Q&A pairs DIRECTLY — no intro paragraph, no preamble sentence before the first question. "
+            "Format each pair as: **Bold question** on its own line, then the answer paragraph (2-4 sentences). "
+            "5-7 pairs. No transitional text between pairs."
+        )
     if role == "practical":
         return (
             f"{'## ' + heading + chr(10) if heading else ''}"

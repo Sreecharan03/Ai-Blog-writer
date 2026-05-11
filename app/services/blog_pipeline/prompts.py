@@ -35,7 +35,12 @@ Good: "Sleep loss cratered cognitive performance."
 Bad: "The market declined significantly."
 Good: "The market collapsed quietly, the way ice melts — imperceptibly until it's gone."
 
-LAW 4 — ACTIVE ATTRIBUTION (never passive):
+LAW 4 — [VERIFY] MARKERS:
+Some facts in the Evidence Locker are marked [VERIFY]. When you use a [VERIFY] fact in the text, keep the [VERIFY] tag immediately after the statistic or claim. Editors use these to fact-check before publishing. Do NOT remove them.
+Good: "Rupee cost averaging can reduce your average entry price by 6-12% in volatile markets [VERIFY]."
+Bad: "Rupee cost averaging can reduce your average entry price by 6-12% in volatile markets."
+
+LAW 5 — ACTIVE ATTRIBUTION (never passive):
 Bad: "Research has shown that exercise improves sleep."
 Good: "A 2019 trial at Johns Hopkins found that 30 minutes of moderate exercise cut sleep onset time in half."
 If no named source exists in Evidence Locker: write the finding as a direct observation, not a citation. "Thirty minutes of moderate exercise, done consistently, cuts the time it takes to fall asleep — sometimes by half."
@@ -50,6 +55,20 @@ Instead: end paragraphs with a forward-looking observation, a specific detail, o
 
 LAW 7 — READER-FIRST FRAMING:
 Write as if explaining to a smart friend who has 60 seconds. Not a professor. Not a search engine.
+
+LAW 8 — WARM SECTION ENDINGS (never cautionary):
+Never end a body section with advice to see a doctor, clinician, or specialist. Never end with a disclaimer, warning, or cautionary note. Section endings should leave the reader curious, encouraged, or equipped — not anxious.
+Good: "Pick one variable. Change it tonight. Watch what happens in the morning."
+Good: "That gap — between how tired you feel and how impaired you actually are — is where the interesting work begins."
+Bad: "If symptoms persist, consult a clinician or sleep specialist."
+Bad: "Talk to a doctor if you experience these symptoms regularly."
+COMPLIANCE NOTE: Any professional consultation advice belongs ONLY in the FAQ section — and only once, for the one Q&A where it is genuinely needed.
+
+LAW 9 — EMPATHY BEFORE INFORMATION:
+The reader came with a problem, not a textbook question. Acknowledge their experience before explaining the science. One empathetic observation per section lands better than three paragraphs of data.
+Good: "The frustrating part isn't that sleep is complicated. It's that the thing you're doing right — eight hours — can still go wrong."
+Good: "You're not imagining it. The tiredness is real. The science just explains why eight hours isn't always the answer."
+Bad: "Sleep is a complex biological process involving multiple stages and neurotransmitters that affect various bodily functions."
 
 ══════════════════════════════════════════════════════
 BANNED WORDS (automatic disqualification)
@@ -170,6 +189,7 @@ Why good: ends on a specific actionable observation, opens with a quote (adds te
 
 --- ROLE: faq ---
 Purpose: 5-7 real questions a reader would actually ask. Concise answers (2-4 sentences each). Not obvious questions ("What is sleep?"). Questions that reflect real reader uncertainty or confusion.
+This is the ONLY section in the entire article where a brief professional consultation nudge is allowed — include it in at most ONE answer, only where genuinely relevant (e.g., "When should I see a doctor?"). Never repeat it.
 
 BAD faq:
 "Q: What is sleep quality?
@@ -190,16 +210,36 @@ Alcohol does help you fall asleep faster. It also fragments the back half of you
 One reliable signal: can you fall asleep within five minutes of lying down during the day? If yes, you are likely sleep-deprived. Well-rested people take 10-20 minutes to fall asleep. The five-minute test is called the Multiple Sleep Latency Test and is the same tool sleep clinics use."
 Why good: real questions with counterintuitive angles, specific studies referenced, short and direct answers, no fluff.
 
+--- ROLE: closing ---
+Purpose: 2-4 sentences after the FAQ. No heading. Crystallizes the single most important insight from the article. Leaves the reader feeling resolved and equipped — not cautioned. Never summarizes the sections. Never starts with "In conclusion", "Ultimately", or "To sum up".
+
+BAD closing:
+"In conclusion, sleep quality is more important than sleep quantity. We have covered the key stages of sleep and provided practical tips. By following these guidelines, you can achieve better rest and improved health."
+Why bad: starts with "In conclusion", summarizes what was already covered, ends with "by following these guidelines" (template phrase), generic.
+
+GOOD closing (health):
+"The debate between hours and quality has a simple resolution: stop measuring minutes and start protecting continuity. Most people who fix their mornings don't find a new supplement — they find one variable to keep boring and steady. Pick yours."
+Why good: distills the core insight in one sentence, gives a clear action, ends with a direct personal instruction, no summary.
+
+GOOD closing (finance):
+"The SIP vs lump sum debate has an answer — it just isn't the mathematical one. The strategy you execute consistently over 15 years will always outperform the theoretically optimal one you abandon after three bad months. Pick your approach, automate it, and stop revisiting the decision."
+Why good: reframes the core question, delivers a truth that feels earned, ends on action not caution, no "in conclusion".
+
+GOOD closing (tech):
+"The best security posture is the one your team will actually maintain. Perfect tools poorly adopted lose to imperfect tools consistently used. Audit what you have, close the obvious gaps, and build the habit before you build the stack."
+Why good: domain-independent truth, specific and actionable, ends on forward motion.
+
 ══════════════════════════════════════════════════════
 SELF-CRITIQUE CHECKLIST (apply before finalizing)
 ══════════════════════════════════════════════════════
 Before outputting your section, silently verify:
 [1] Sentence 1: Does it open with something specific — a number, a name, a moment — not a generic claim?
 [2] Burstiness: Is there at least one sentence under 9 words AND one sentence over 18 words?
-[3] Last sentence: Does it leave a thought or open a question, not summarize what you just wrote?
+[3] Last sentence: Does it leave a thought or open a question — not a warning, not a disclaimer, not a summary?
 [4] Banned words: Zero instances of any banned word?
 [5] Fillers: Zero transitional fillers?
 [6] Attribution: If you cite a finding, is it active ("A 2019 trial at X found...") not passive ("Research has shown...")?
+[7] Compliance nudge: Is this a body section (not FAQ)? If yes — zero mentions of consulting a doctor, clinician, or specialist. Remove any that exist.
 
 If any check fails: rewrite that specific sentence or phrase. Do NOT output the draft — output only the corrected final version.
 """
@@ -311,6 +351,7 @@ ROLES available (use each at most once, except body sections):
 - counterargument: strongest objection, taken seriously, then answered
 - conclusion: forward-looking close, no summary
 - faq: 5-7 real reader questions, 2-4 sentence answers each
+- closing: no heading, 2-4 sentences ONLY, placed AFTER faq — crystallizes the article's single core insight, leaves reader resolved and clear-headed, never starts with "In conclusion" or "Ultimately"
 
 RULES:
 - Total sections: 6-8 MAXIMUM
@@ -321,6 +362,8 @@ RULES:
 - Headings must be story-driven, never label-style ("What Is X", "Why It Matters", "How It Works")
 - Conclusion heading: never "Conclusion" — use a forward-looking phrase
 - writing_intent must be specific: not "explain sleep" but "make the reader feel the gap between how tired they think they are and how impaired they actually are"
+- The first body section (index 1) must NOT restate the hook's opening scene or repeat its setup. It must advance from a completely different angle — the hook set the stage, now move the reader forward
+- FAQ heading: use a story-driven heading that sounds like a real reader question (e.g. "The questions you're already asking at 7 a.m.") — never just "FAQ"
 """
 
 
@@ -342,6 +385,8 @@ EVIDENCE LOCKER FACTS (use these for specific claims — you may add general dom
 
 PREVIOUS SECTION ENDING (maintain narrative continuity — do NOT repeat, just continue the thread):
 {prev_section_tail}
+
+CONTINUITY RULE: Do NOT restate or echo the hook's opening scene. If the hook opened with "you went to bed on time" or "you did the right thing" — those words are done. Open this section from a new angle that moves the reader forward.
 
 SPARSE EVIDENCE NOTE: {sparse_note}
 
