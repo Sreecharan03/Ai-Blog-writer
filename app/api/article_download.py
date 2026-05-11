@@ -202,7 +202,11 @@ def download_article_docx(
     # Resolve best title: GCS artifact > fallback_title param > DB topic
     title = gcs_title or fallback_title or topic or "Article"
 
-    # ── 3. Convert to .docx in memory ───────────────────────────────────────
+    # ── 3. Strip internal pipeline markers (safety net for older GCS artifacts) ─
+    markdown = re.sub(r"\s*\[F\d+\]", "", markdown)
+    markdown = re.sub(r"\s*\[VERIFY\]", "", markdown)
+
+    # ── 4. Convert to .docx in memory ───────────────────────────────────────
     buf = io.BytesIO()
     markdown_to_docx(title, markdown, buf)
     buf.seek(0)

@@ -94,6 +94,37 @@ def _build_toc(sections: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _strip_hook_structural(hook_raw: str) -> str:
+    """Remove assembler-owned structural blocks that the hook writer must not emit.
+
+    Strips the header line (**In this article...** / **Key takeaways...**) AND
+    all immediately following bullet/blank lines belonging to that block.
+    The old regex approach only removed the header line, leaving orphaned bullets
+    which caused duplicate 'In this article' sections in the rendered output.
+    """
+    _BLOCK_HEADER = re.compile(
+        r'^\*\*(?:In this article|Key takeaways)[:\*]*\*\*\s*$',
+        re.IGNORECASE,
+    )
+    lines = hook_raw.split('\n')
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        if _BLOCK_HEADER.match(lines[i]):
+            i += 1
+            # Skip all bullet lines and blank lines that belong to this block
+            while i < len(lines) and (
+                lines[i].startswith('- ')
+                or lines[i].startswith('* ')
+                or not lines[i].strip()
+            ):
+                i += 1
+        else:
+            result.append(lines[i])
+            i += 1
+    return '\n'.join(result).rstrip()
+
+
 def _insert_above_fold(
     assembled: str,
     sections: List[Dict[str, Any]],
@@ -131,15 +162,10 @@ def _insert_above_fold(
 
     # Strip any structural blocks the hook writer may have added (TOC, Key Takeaways).
     # These are assembler-owned — duplicate occurrences ruin the above-fold layout.
+    # Line-by-line removal: strips the header line AND all following bullet/blank lines
+    # that belong to the block (regex approach left orphaned bullets behind).
     hook_raw = assembled[: m.start()].rstrip()
-    hook_part = re.sub(
-        r"\*\*In this article[:\*]*\*\*.*?(?=\n\n|\Z)",
-        "", hook_raw, flags=re.DOTALL | re.IGNORECASE
-    ).rstrip()
-    hook_part = re.sub(
-        r"\*\*Key takeaways[:\*]*\*\*.*?(?=\n\n|\Z)",
-        "", hook_part, flags=re.DOTALL | re.IGNORECASE
-    ).rstrip()
+    hook_part = _strip_hook_structural(hook_raw)
     rest = assembled[m.start():]
 
     hook_section = next((s for s in sections if s.get("role") == "hook"), None)
@@ -236,6 +262,49 @@ Rules:
     return text, {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
 
+def _trim_to_budget(sections: List[Dict[str, Any]], budget: int) -> List[Dict[str, Any]]:
+    """
+    Trim the longest trimmable sections (body roles only) until total word count
+    fits within budget. Trims at paragraph boundaries — never mid-sentence.
+    hook, faq, and closing sections are left untouched.
+    """
+    SKIP_ROLES = {"hook", "faq", "closing"}
+
+    def _trim_text(text: str, target: int) -> str:
+        """Trim text to target words by dropping trailing paragraphs."""
+        paras = [p for p in text.split("\n\n") if p.strip()]
+        kept: List[str] = []
+        total = 0
+        for p in paras:
+            pw = word_count(p)
+            if total + pw > target and kept:
+                break
+            kept.append(p)
+            total += pw
+        return "\n\n".join(kept)
+
+    current = sum(word_count(s.get("text") or "") for s in sections)
+    for _ in range(len(sections)):
+        if current <= budget:
+            break
+        # Find the fattest trimmable section
+        candidates = [
+            (i, word_count(s.get("text") or ""))
+            for i, s in enumerate(sections)
+            if s.get("role") not in SKIP_ROLES and s.get("text")
+        ]
+        if not candidates:
+            break
+        idx, section_wc = max(candidates, key=lambda x: x[1])
+        excess = current - budget
+        new_target = max(section_wc - excess, MIN_SECTION_WORDS)
+        trimmed = _trim_text(sections[idx]["text"], new_target)
+        sections[idx] = {**sections[idx], "text": trimmed}
+        current = sum(word_count(s.get("text") or "") for s in sections)
+
+    return sections
+
+
 def assemble(
     client: Optional[OpenAI],
     model: Optional[str],
@@ -271,6 +340,16 @@ def assemble(
 
         assembled = _join(sections)
         wc = word_count(assembled)
+
+    # Trim over-length: if total exceeds MAX_WORDS, shorten the fattest body sections
+    if wc > MAX_WORDS:
+        sections = _trim_to_budget(sections, budget=MAX_WORDS)
+        assembled = _join(sections)
+        wc = word_count(assembled)
+
+    # Strip internal pipeline markers — must never appear in published output
+    assembled = re.sub(r'\s*\[F\d+\]', '', assembled)
+    assembled = re.sub(r'\s*\[VERIFY\]', '', assembled)
 
     # Add CMS anchor IDs to all H2/H3 headings
     assembled = _add_anchors_to_headings(assembled)

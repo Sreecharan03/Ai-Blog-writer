@@ -26,6 +26,18 @@ _ROLE_TARGET_WORDS = {
 _NARRATIVE_ARC = ["hook", "context", "evidence", "evidence", "opinion", "counterargument", "conclusion", "faq", "closing"]
 _INSTRUCTIONAL_ARC = ["hook", "context", "evidence", "practical", "practical", "counterargument", "conclusion", "faq", "closing"]
 
+# Meaningful fallback headings used when the LLM planner fails.
+# These read as real section titles — not internal role names.
+_FALLBACK_HEADINGS: dict[str, str] = {
+    "context":         "What You Need to Know First",
+    "evidence":        "What the Research Actually Shows",
+    "practical":       "How to Put This Into Practice",
+    "opinion":         "A Perspective Worth Considering",
+    "counterargument": "The Case Against — and Why It Still Matters",
+    "conclusion":      "The Bottom Line",
+    "faq":             "Questions People Ask",
+}
+
 
 def _fallback_plan(arc: str, facts: List[Dict], target_words: int) -> List[Dict[str, Any]]:
     """Returns a safe default plan when the LLM planner fails."""
@@ -39,7 +51,7 @@ def _fallback_plan(arc: str, facts: List[Dict], target_words: int) -> List[Dict[
         sections.append({
             "index": i,
             "role": role,
-            "heading": None if role == "hook" else role.title(),
+            "heading": None if role in ("hook", "closing") else _FALLBACK_HEADINGS.get(role, role.replace("_", " ").title()),
             "target_words": _ROLE_TARGET_WORDS.get(role, 250),
             "assigned_fact_ids": assigned,
             "writing_intent": f"deliver the key insight for this {role} section",
@@ -66,7 +78,7 @@ def plan_sections(
     sparse: bool,
     target_words: int = 2000,
     temperature: float = 0.2,
-    max_tokens: int = 1200,
+    max_tokens: int = 1800,
     brand_context: Optional[BrandContext] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """

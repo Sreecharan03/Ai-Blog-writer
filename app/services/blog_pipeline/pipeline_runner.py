@@ -29,6 +29,12 @@ from .utils import sum_usage as _sum_usage
 MAX_SECTION_TOKENS = 750
 MAX_ASSEMBLE_EXPAND_TOKENS = 500
 
+# Roles that produce heavy bullet lists need more token headroom to avoid mid-sentence cuts
+_ROLE_MAX_TOKENS: dict[str, int] = {
+    "practical": 950,
+    "faq": 900,
+}
+
 
 def run_blog_pipeline(
     client: OpenAI,
@@ -85,7 +91,7 @@ def run_blog_pipeline(
             facts=facts,
             sparse=is_sparse,
             prev_section_text=prev_text,
-            max_tokens=MAX_SECTION_TOKENS,
+            max_tokens=_ROLE_MAX_TOKENS.get(role, MAX_SECTION_TOKENS),
             brand_context=brand_context,
         )
         all_usage = _sum_usage(all_usage, writer_usage)

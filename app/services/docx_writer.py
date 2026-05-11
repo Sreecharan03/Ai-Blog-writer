@@ -60,6 +60,8 @@ def clean(text: str) -> str:
     text = text.replace('—', ' - ')          # em-dash
     text = text.replace('–', ' - ')          # en-dash
     text = text.replace('‑', '-')            # non-breaking hyphen
+    # Convert markdown links [text](url) → text (Word doesn't render MD links)
+    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
     return text
 
 
@@ -126,8 +128,24 @@ def markdown_to_docx(
         section.left_margin   = Inches(1.15)
         section.right_margin  = Inches(1.15)
 
+    # ── Paragraph spacing (applied once via styles — no per-paragraph overhead) ─
+    doc.styles['Normal'].paragraph_format.space_after  = Pt(8)
+    doc.styles['Normal'].paragraph_format.space_before = Pt(0)
+
+    for _h, _before, _after in [
+        ('Heading 1', 20, 8),
+        ('Heading 2', 18, 6),
+        ('Heading 3', 14, 4),
+    ]:
+        doc.styles[_h].paragraph_format.space_before = Pt(_before)
+        doc.styles[_h].paragraph_format.space_after  = Pt(_after)
+
+    doc.styles['List Bullet'].paragraph_format.space_after = Pt(3)
+    doc.styles['List Number'].paragraph_format.space_after = Pt(3)
+
     tp = doc.add_heading(clean(title), level=0)
     tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tp.paragraph_format.space_after = Pt(14)
     doc.add_paragraph('')
 
     for line in markdown.splitlines():

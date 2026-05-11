@@ -158,7 +158,7 @@ def write_section(
             meta["retry_reasons"].append(f"attempt {attempt+1} API error: {e}")
             continue
 
-        passed, failures = run_local_qc(text, role=role, min_words=min_words, max_words=int(target_words * 1.6))
+        passed, failures = run_local_qc(text, role=role, min_words=min_words, max_words=int(target_words * 1.25))
 
         # Always keep the best attempt so far
         if not best_text or (not passed and len(failures) < len(best_failures)):
