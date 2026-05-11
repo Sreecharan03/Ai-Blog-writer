@@ -13,15 +13,15 @@ from .prompts import SECTION_PLANNER_SYSTEM, SECTION_PLANNER_USER
 from .prompt_engine import BrandContext
 
 _ROLE_TARGET_WORDS = {
-    "hook": 185,
-    "context": 260,
-    "evidence": 290,
-    "practical": 270,
-    "opinion": 220,
-    "counterargument": 240,
-    "conclusion": 200,
-    "faq": 180,
-    "closing": 90,
+    "hook": 220,
+    "context": 310,
+    "evidence": 340,
+    "practical": 320,
+    "opinion": 260,
+    "counterargument": 280,
+    "conclusion": 240,
+    "faq": 220,
+    "closing": 100,
 }
 
 _NARRATIVE_ARC = ["hook", "context", "evidence", "evidence", "opinion", "counterargument", "conclusion", "faq", "closing"]
@@ -161,5 +161,17 @@ def plan_sections(
 
     if not sections:
         return _fallback_plan(arc, facts, target_words), usage
+
+    # Always guarantee a closing section — LLM planners sometimes omit it
+    if not any(s["role"] == "closing" for s in sections):
+        sections.append({
+            "index": len(sections),
+            "role": "closing",
+            "heading": None,
+            "target_words": _ROLE_TARGET_WORDS["closing"],
+            "assigned_fact_ids": [],
+            "writing_intent": "deliver a single forward-looking observation that crystallizes the article's most important insight",
+            "opening_constraint": "",
+        })
 
     return sections, usage

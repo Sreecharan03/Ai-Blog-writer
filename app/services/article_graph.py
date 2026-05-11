@@ -156,7 +156,7 @@ def _log_pipeline_event(tenant_id: str, pipeline_id: str, event_type: str, detai
 
 def _final_qc_thresholds() -> Dict[str, Any]:
     return {
-        "word_count_min": 1900,
+        "word_count_min": 2300,
         "word_count_max": 3000,
         "fk_grade_min": 5.0,
         "fk_grade_max": 12.0,
@@ -174,7 +174,7 @@ def _post_humanization_qc_thresholds() -> Dict[str, Any]:
     # Only enforce structural integrity  -  word count, sections, FAQ, repetition.
     # FK/FRE are intentionally unchecked here to avoid an unescapable loop.
     return {
-        "word_count_min": 1900,
+        "word_count_min": 2300,
         "word_count_max": 3000,
         "fk_grade_min": 0.0,
         "fk_grade_max": 99.0,
@@ -583,10 +583,10 @@ def finalize_node(state: PipelineState) -> dict:
         final_step = "completed"
         error = None
 
-    # Ensure structural HTML comments survive QC/zerogpt rewrites
-    _AUTHOR_BIO = "<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
-    if article_markdown and _AUTHOR_BIO not in article_markdown:
-        article_markdown = article_markdown.rstrip() + "\n\n" + _AUTHOR_BIO
+    # Ensure AUTHOR BIO comment survives QC/zerogpt rewrites.
+    # assembler.py already adds the full-format comment; only append if missing entirely.
+    if article_markdown and "<!-- AUTHOR BIO:" not in article_markdown:
+        article_markdown = article_markdown.rstrip() + "\n\n<!-- AUTHOR BIO: [Author name, credentials — fill before publishing] -->"
 
     result = {
         "article_markdown": article_markdown,

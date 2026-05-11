@@ -11,8 +11,8 @@ from openai import OpenAI
 from .gates_local_qc import word_count
 from .prompt_engine import BrandContext
 
-MIN_WORDS = 1900
-MAX_WORDS = 2600
+MIN_WORDS = 2300
+MAX_WORDS = 3000
 MIN_SECTION_WORDS = 180
 
 
@@ -48,8 +48,7 @@ def _build_key_takeaways(sections: List[Dict[str, Any]]) -> str:
         for s in sections
         if s.get("heading")
         and s.get("role") not in ("hook", "faq", "closing")
-        and "(" not in s.get("heading", "")
-        and len(s.get("heading", "")) <= 65
+        and len(s.get("heading", "")) <= 90
     ]
     if len(headings) < 2:
         return ""
@@ -277,4 +276,6 @@ def section_count(markdown: str) -> int:
 
 
 def has_faq(markdown: str) -> bool:
-    return bool(re.search(r"^#{1,3}\s+.*\b(FAQ|Frequently\s+Asked)\b", markdown, re.MULTILINE | re.IGNORECASE))
+    if re.search(r"^#{1,3}\s+.*\b(?:FAQ|Frequently\s+Asked|question)\b", markdown, re.MULTILINE | re.IGNORECASE):
+        return True
+    return len(re.findall(r"^\*\*.+\?\*\*", markdown, re.MULTILINE)) >= 3

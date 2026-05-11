@@ -275,9 +275,12 @@ def _count_unique_sections(text: str) -> int:
 
 
 def _has_faq_section(text: str) -> bool:
-    """Check if article has an FAQ heading (## FAQ, ## Frequently Asked Questions, ## 14) FAQ, etc.)."""
+    """Detect FAQ section by heading keywords OR Q&A structure (bold question + answer pairs)."""
     text = text or ""
-    return bool(re.search(r"^#{1,3}\s+.*\b(?:FAQ|Frequently\s+Asked)\b", text, re.MULTILINE | re.IGNORECASE))
+    if re.search(r"^#{1,3}\s+.*\b(?:FAQ|Frequently\s+Asked|question)\b", text, re.MULTILINE | re.IGNORECASE):
+        return True
+    # Story-driven FAQ headings omit "FAQ" — detect by Q&A pair density (≥3 bold questions)
+    return len(re.findall(r"^\*\*.+\?\*\*", text, re.MULTILINE)) >= 3
 
 
 def _sha256_bytes(b: bytes) -> str:
