@@ -45,7 +45,11 @@ def _format_instruction(role: str, heading: Optional[str]) -> str:
             "The reader should feel resolved and clear-headed. End on action or truth, not caution."
         )
     if role == "hook":
-        return "Plain markdown paragraphs only. No heading line."
+        return (
+            "Plain flowing prose paragraphs ONLY. No heading. No bullet lists. "
+            "No bold structural labels such as 'Key takeaways', 'In this article', or 'Table of contents'. "
+            "The assembler adds those automatically — your job is the opening paragraphs only."
+        )
     if role == "faq":
         h = heading or "FAQ"
         return (

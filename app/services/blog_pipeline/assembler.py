@@ -129,7 +129,17 @@ def _insert_above_fold(
         parts += ["", assembled, "", author_bio]
         return "\n".join(parts)
 
-    hook_part = assembled[: m.start()].rstrip()
+    # Strip any structural blocks the hook writer may have added (TOC, Key Takeaways).
+    # These are assembler-owned — duplicate occurrences ruin the above-fold layout.
+    hook_raw = assembled[: m.start()].rstrip()
+    hook_part = re.sub(
+        r"\*\*In this article[:\*]*\*\*.*?(?=\n\n|\Z)",
+        "", hook_raw, flags=re.DOTALL | re.IGNORECASE
+    ).rstrip()
+    hook_part = re.sub(
+        r"\*\*Key takeaways[:\*]*\*\*.*?(?=\n\n|\Z)",
+        "", hook_part, flags=re.DOTALL | re.IGNORECASE
+    ).rstrip()
     rest = assembled[m.start():]
 
     hook_section = next((s for s in sections if s.get("role") == "hook"), None)

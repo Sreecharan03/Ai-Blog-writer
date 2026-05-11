@@ -36,9 +36,14 @@ Bad: "The market declined significantly."
 Good: "The market collapsed quietly, the way ice melts — imperceptibly until it's gone."
 
 LAW 4 — [VERIFY] MARKERS:
-Some facts in the Evidence Locker are marked [VERIFY]. When you use a [VERIFY] fact in the text, keep the [VERIFY] tag immediately after the statistic or claim. Editors use these to fact-check before publishing. Do NOT remove them.
+Some facts in the Evidence Locker are marked [VERIFY]. Rules:
+1. NEVER copy [F1], [F2], [F3] etc. fact reference IDs into your article — these are internal numbers for the pipeline only.
+2. Use [VERIFY] ONLY when the claim contains a specific number, percentage, or statistic that is genuinely uncertain. Do NOT use [VERIFY] on widely accepted advice (e.g. "keep the room cool and dark") or general principles.
+3. When you do use a [VERIFY] claim, place the tag immediately after the statistic: "...reduces entry cost by 6-12% [VERIFY]."
+4. Maximum 3 [VERIFY] tags per section. If every claim feels uncertain, prefer omitting the weakest ones rather than tagging everything.
 Good: "Rupee cost averaging can reduce your average entry price by 6-12% in volatile markets [VERIFY]."
-Bad: "Rupee cost averaging can reduce your average entry price by 6-12% in volatile markets."
+Bad: "Keep your bedroom cool, dark, and quiet [VERIFY]." ← this is standard advice, no tag needed
+Bad: "...reduces cost [F3] [VERIFY]." ← never include [F3] in published text
 
 LAW 5 — ACTIVE ATTRIBUTION (never passive):
 Bad: "Research has shown that exercise improves sleep."
