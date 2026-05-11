@@ -13,6 +13,7 @@ from openai import OpenAI
 from .prompts import SECTION_WRITER_SYSTEM, SECTION_WRITER_USER
 from .gates_local_qc import run_local_qc, word_count
 from .prompt_engine import BrandContext
+from .utils import extract_usage, sum_usage
 
 MAX_RETRIES = 2
 BASE_TEMPERATURE = 0.75
@@ -68,25 +69,6 @@ def _prev_tail(prev_section_text: Optional[str], n_words: int = 40) -> str:
     words = prev_section_text.strip().split()
     tail = " ".join(words[-n_words:]) if len(words) > n_words else prev_section_text.strip()
     return f"...{tail}"
-
-
-def _usage(resp: Any) -> Dict[str, int]:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    return {
-        "prompt_tokens": getattr(u, "prompt_tokens", 0),
-        "output_tokens": getattr(u, "completion_tokens", 0),
-        "total_tokens": getattr(u, "total_tokens", 0),
-    }
-
-
-def _sum_usage(*items: Dict[str, int]) -> Dict[str, int]:
-    out = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    for d in items:
-        for k in out:
-            out[k] += d.get(k, 0)
-    return out
 
 
 def write_section(
@@ -167,7 +149,7 @@ def write_section(
                 max_completion_tokens=max_tokens,
             )
             text = (resp.choices[0].message.content or "").strip()
-            total_usage = _sum_usage(total_usage, _usage(resp))
+            total_usage = sum_usage(total_usage, extract_usage(resp))
         except Exception as e:
             meta["retry_reasons"].append(f"attempt {attempt+1} API error: {e}")
             continue

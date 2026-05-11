@@ -5,12 +5,11 @@ Runs in parallel with Topic Analyst.
 Falls back to raw text extraction if LLM fails.
 """
 from __future__ import annotations
-import json
-import re
 from typing import Any, Dict, List, Tuple
 
 from openai import OpenAI
 from .prompts import EVIDENCE_LOCKER_SYSTEM, EVIDENCE_LOCKER_USER
+from .utils import extract_usage, parse_json_response
 
 MAX_SOURCE_CHARS = 24000
 MAX_FACTS = 36
@@ -56,32 +55,6 @@ def _fallback_facts(sources: List[Dict[str, Any]], limit: int = 20) -> List[Dict
     return facts
 
 
-def _parse(raw: str) -> Dict[str, Any]:
-    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    m = re.search(r"\{[\s\S]+\}", raw)
-    if m:
-        try:
-            return json.loads(m.group())
-        except Exception:
-            pass
-    return {}
-
-
-def _usage(resp: Any) -> Dict[str, int]:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    return {
-        "prompt_tokens": getattr(u, "prompt_tokens", 0),
-        "output_tokens": getattr(u, "completion_tokens", 0),
-        "total_tokens": getattr(u, "total_tokens", 0),
-    }
-
-
 def build_evidence_locker(
     client: OpenAI,
     model: str,
@@ -112,9 +85,10 @@ def build_evidence_locker(
             max_completion_tokens=max_tokens,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        parsed = _parse(raw)
-        usage = _usage(resp)
-    except Exception:
+        parsed = parse_json_response(raw)
+        usage = extract_usage(resp)
+    except Exception as e:
+        import logging; logging.getLogger("evidence_locker").warning("build_evidence_locker LLM failed, using fallback: %s", e)
         fallback = _fallback_facts(sources, limit=max_facts)
         return fallback, len(fallback) < 8, {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 

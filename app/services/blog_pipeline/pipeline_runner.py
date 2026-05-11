@@ -24,17 +24,10 @@ from .agent_mini_humanize import humanize_section
 from .assembler import assemble, section_count, has_faq
 from .gates_local_qc import word_count, run_local_qc
 from .prompt_engine import BrandContext
+from .utils import sum_usage as _sum_usage
 
 MAX_SECTION_TOKENS = 750
 MAX_ASSEMBLE_EXPAND_TOKENS = 500
-
-
-def _sum_usage(*items: Dict[str, int]) -> Dict[str, int]:
-    out = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    for d in items:
-        for k in out:
-            out[k] += d.get(k, 0)
-    return out
 
 
 def run_blog_pipeline(

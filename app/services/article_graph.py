@@ -537,8 +537,6 @@ def finalize_node(state: PipelineState) -> dict:
     """Build final result summary with article content and all metrics."""
     # Fetch the final article markdown from GCS
     article_markdown, source_analysis = _fetch_draft_from_gcs(state)
-    if source_analysis:
-        state["source_analysis"] = source_analysis
 
     # Final cleanup pass  -  catches anything zerogpt_fix missed
     if article_markdown:
@@ -558,8 +556,6 @@ def finalize_node(state: PipelineState) -> dict:
             qc_passed = bool(final_qc.get("qc_pass", False))
             qc_metrics = final_qc.get("qc_metrics")
             qc_thresholds = final_qc.get("qc_thresholds")
-            state["qc_pass"] = qc_passed
-            state["qc_metrics"] = qc_metrics
         except Exception as e:
             logger.warning("finalize: failed to recompute final QC: %s", str(e)[:200])
 
@@ -594,6 +590,7 @@ def finalize_node(state: PipelineState) -> dict:
         "qc_pass": qc_passed,
         "qc_metrics": qc_metrics,
         "qc_thresholds": qc_thresholds,
+        "source_analysis": source_analysis,
         "quality_retry_count": _quality_retry_count(state),
         "max_quality_retries": _max_quality_retries(state),
         "total_tokens": total,

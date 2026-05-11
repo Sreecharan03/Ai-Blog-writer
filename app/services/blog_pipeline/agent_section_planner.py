@@ -4,13 +4,12 @@ Waits for Topic Analyst + Evidence Locker, then designs the full section bluepri
 Every other agent depends on its output — it defines the contract.
 """
 from __future__ import annotations
-import json
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 from .prompts import SECTION_PLANNER_SYSTEM, SECTION_PLANNER_USER
 from .prompt_engine import BrandContext
+from .utils import extract_usage, parse_json_response
 
 _ROLE_TARGET_WORDS = {
     "hook": 220,
@@ -47,32 +46,6 @@ def _fallback_plan(arc: str, facts: List[Dict], target_words: int) -> List[Dict[
             "opening_constraint": "",
         })
     return sections
-
-
-def _parse(raw: str) -> Dict[str, Any]:
-    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    m = re.search(r"\{[\s\S]+\}", raw)
-    if m:
-        try:
-            return json.loads(m.group())
-        except Exception:
-            pass
-    return {}
-
-
-def _usage(resp: Any) -> Dict[str, int]:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    return {
-        "prompt_tokens": getattr(u, "prompt_tokens", 0),
-        "output_tokens": getattr(u, "completion_tokens", 0),
-        "total_tokens": getattr(u, "total_tokens", 0),
-    }
 
 
 def _facts_summary(facts: List[Dict[str, Any]]) -> str:
@@ -132,9 +105,10 @@ def plan_sections(
             max_completion_tokens=max_tokens,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        parsed = _parse(raw)
-        usage = _usage(resp)
-    except Exception:
+        parsed = parse_json_response(raw)
+        usage = extract_usage(resp)
+    except Exception as e:
+        import logging; logging.getLogger("section_planner").warning("plan_sections LLM failed, using fallback: %s", e)
         return _fallback_plan(arc, facts, target_words), {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     sections_raw = parsed.get("sections") if isinstance(parsed.get("sections"), list) else []

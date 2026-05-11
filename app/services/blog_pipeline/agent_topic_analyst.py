@@ -4,11 +4,11 @@ Classifies content type, identifies narrative angle, seeds hook and counterargum
 Runs in parallel with Evidence Locker builder.
 """
 from __future__ import annotations
-import json
 from typing import Any, Dict, List, Tuple
 
 from openai import OpenAI
 from .prompts import TOPIC_ANALYST_SYSTEM, TOPIC_ANALYST_USER
+from .utils import extract_usage, parse_json_response
 
 _DEFAULTS = {
     "content_type": "explainer",
@@ -19,35 +19,6 @@ _DEFAULTS = {
     "counterargument_seed": "many people already know this and don't need to change",
     "hook_seed": "a specific finding or moment related to this topic",
 }
-
-
-def _parse(raw: str) -> Dict[str, Any]:
-    raw = raw.strip()
-    # strip ```json fences
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    # try extracting first {...}
-    m = __import__("re").search(r"\{[\s\S]+\}", raw)
-    if m:
-        try:
-            return json.loads(m.group())
-        except Exception:
-            pass
-    return {}
-
-
-def _usage(resp: Any) -> Dict[str, int]:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    return {
-        "prompt_tokens": getattr(u, "prompt_tokens", 0),
-        "output_tokens": getattr(u, "completion_tokens", 0),
-        "total_tokens": getattr(u, "total_tokens", 0),
-    }
 
 
 def analyze_topic(
@@ -76,9 +47,10 @@ def analyze_topic(
             max_completion_tokens=max_tokens,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        parsed = _parse(raw)
-        usage = _usage(resp)
-    except Exception:
+        parsed = parse_json_response(raw)
+        usage = extract_usage(resp)
+    except Exception as e:
+        import logging; logging.getLogger("topic_analyst").warning("analyze_topic failed, using defaults: %s", e)
         return dict(_DEFAULTS), {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     # merge with defaults for any missing keys

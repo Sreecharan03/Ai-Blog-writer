@@ -10,19 +10,9 @@ from typing import Any, Dict, List, Tuple
 from openai import OpenAI
 from .prompts import MINI_HUMANIZE_SYSTEM, MINI_HUMANIZE_USER
 from .gates_local_qc import run_local_qc
+from .utils import extract_usage
 
 MAX_HUMANIZE_RETRIES = 1
-
-
-def _usage(resp: Any) -> Dict[str, int]:
-    u = getattr(resp, "usage", None)
-    if u is None:
-        return {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    return {
-        "prompt_tokens": getattr(u, "prompt_tokens", 0),
-        "output_tokens": getattr(u, "completion_tokens", 0),
-        "total_tokens": getattr(u, "total_tokens", 0),
-    }
 
 
 def humanize_section(
@@ -62,7 +52,7 @@ def humanize_section(
                 max_completion_tokens=max_tokens,
             )
             fixed = (resp.choices[0].message.content or "").strip()
-            total_usage = {k: total_usage[k] + _usage(resp).get(k, 0) for k in total_usage}
+            total_usage = {k: total_usage[k] + extract_usage(resp).get(k, 0) for k in total_usage}
         except Exception:
             break
 
