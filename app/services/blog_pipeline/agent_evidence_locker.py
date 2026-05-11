@@ -5,6 +5,7 @@ Runs in parallel with Topic Analyst.
 Falls back to raw text extraction if LLM fails.
 """
 from __future__ import annotations
+import re
 from typing import Any, Dict, List, Tuple
 
 from openai import OpenAI
