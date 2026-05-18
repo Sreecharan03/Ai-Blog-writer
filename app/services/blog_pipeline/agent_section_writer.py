@@ -67,6 +67,25 @@ def _format_instruction(role: str, heading: Optional[str]) -> str:
     return f"Start output with: {prefix}Then write flowing prose paragraphs."
 
 
+def _style_guide(content_type: str, audience_level: str, role: str) -> str:
+    """Build a short style instruction based on content_type and audience_level."""
+    if role in ("hook", "closing"):
+        return "Keep it short and specific. 2-3 short paragraphs max. No story longer than one paragraph."
+    if content_type in ("comparison", "explainer", "how_to"):
+        audience_note = {
+            "beginner": "Define every term. Assume the reader has never heard it before. Use ₹/$ examples.",
+            "intermediate": "Skip basic definitions. Focus on nuance, edge cases, and practical application.",
+            "advanced": "Assume domain knowledge. Focus on mechanisms, data, and non-obvious insights.",
+        }.get(audience_level, "Define key terms. Use specific examples.")
+        return (
+            f"This is a {content_type} article for a {audience_level} audience. "
+            f"{audience_note} "
+            "Prioritize clarity over style. Definition first, explanation second, example third. "
+            "Use tables for comparisons. Use numbered lists for steps."
+        )
+    return f"This is a {content_type} article. Write clearly and specifically for a {audience_level} reader."
+
+
 def _prev_tail(prev_section_text: Optional[str], n_words: int = 40) -> str:
     if not prev_section_text:
         return "(this is the opening section)"
@@ -86,6 +105,8 @@ def write_section(
     prev_section_text: Optional[str] = None,
     max_tokens: int = 700,
     brand_context: Optional[BrandContext] = None,
+    content_type: str = "explainer",
+    audience_level: str = "beginner",
 ) -> Tuple[str, bool, List[str], Dict[str, int], Dict[str, Any]]:
     """
     Write one blog section with CoT + self-critique + local QC gate.
@@ -102,6 +123,7 @@ def write_section(
     target_words = int(section.get("target_words", 250))
     min_words = max(80 if role == "faq" else 150, int(target_words * 0.75))
     assigned_ids = section.get("assigned_fact_ids") or []
+    key_term_to_define = section.get("key_term_to_define") or "none"
     writing_intent = section.get("writing_intent", "deliver the key insight for this section")
     opening_constraint = section.get("opening_constraint", "")
 
@@ -131,7 +153,10 @@ def write_section(
         user_prompt = SECTION_WRITER_USER.format(
             role=role,
             title=title,
+            content_type=content_type,
+            audience_level=audience_level,
             heading=heading or "(no heading for this section)",
+            key_term_to_define=key_term_to_define,
             writing_intent=writing_intent,
             opening_constraint=opening_constraint,
             target_words=target_words,
@@ -139,6 +164,7 @@ def write_section(
             facts_block=facts_block,
             prev_section_tail=prev_tail,
             sparse_note=sparse_note,
+            style_guide=_style_guide(content_type, audience_level, role),
             format_instruction=format_instruction,
         )
 

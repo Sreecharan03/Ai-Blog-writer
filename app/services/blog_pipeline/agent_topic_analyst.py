@@ -1,7 +1,7 @@
 """
 Topic Analyst Agent (P1).
-Classifies content type, identifies narrative angle, seeds hook and counterargument.
-Runs in parallel with Evidence Locker builder.
+Classifies content type, extracts key terms to define, identifies audience level,
+seeds hook and counterargument. Runs in parallel with Evidence Locker builder.
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Tuple
@@ -12,12 +12,15 @@ from .utils import extract_usage, parse_json_response
 
 _DEFAULTS = {
     "content_type": "explainer",
+    "audience_level": "beginner",
     "audience": "general reader with basic familiarity with the topic",
+    "key_terms": [],
+    "required_concepts": [],
     "primary_angle": "the evidence-based view on this topic",
-    "arc": "narrative",
-    "tone": "authoritative",
+    "arc": "instructional",
+    "tone": "educational",
     "counterargument_seed": "many people already know this and don't need to change",
-    "hook_seed": "a specific finding or moment related to this topic",
+    "hook_seed": "a specific fact or moment related to this topic",
 }
 
 
@@ -27,7 +30,7 @@ def analyze_topic(
     title: str,
     keywords: List[str],
     temperature: float = 0.2,
-    max_tokens: int = 400,
+    max_tokens: int = 600,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """
     Returns (analysis_dict, usage_dict).
@@ -53,7 +56,12 @@ def analyze_topic(
         import logging; logging.getLogger("topic_analyst").warning("analyze_topic failed, using defaults: %s", e)
         return dict(_DEFAULTS), {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
-    # merge with defaults for any missing keys
     result = dict(_DEFAULTS)
-    result.update({k: v for k, v in parsed.items() if v})
+    result.update({k: v for k, v in parsed.items() if v is not None})
+
+    # Ensure list fields are actually lists
+    for field in ("key_terms", "required_concepts"):
+        if not isinstance(result.get(field), list):
+            result[field] = []
+
     return result, usage

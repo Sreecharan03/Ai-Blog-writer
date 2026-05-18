@@ -76,6 +76,9 @@ def run_blog_pipeline(
     )
     all_usage = _sum_usage(all_usage, planner_usage)
 
+    content_type = analysis.get("content_type", "explainer")
+    audience_level = analysis.get("audience_level", "beginner")
+
     # ── Phase 2: Section Writing (sequential for narrative continuity) ────────
     written_sections: List[Dict[str, Any]] = []
     section_meta: List[Dict[str, Any]] = []
@@ -93,6 +96,8 @@ def run_blog_pipeline(
             prev_section_text=prev_text,
             max_tokens=_ROLE_MAX_TOKENS.get(role, MAX_SECTION_TOKENS),
             brand_context=brand_context,
+            content_type=content_type,
+            audience_level=audience_level,
         )
         all_usage = _sum_usage(all_usage, writer_usage)
 

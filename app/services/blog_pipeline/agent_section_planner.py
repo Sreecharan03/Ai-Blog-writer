@@ -54,6 +54,7 @@ def _fallback_plan(arc: str, facts: List[Dict], target_words: int) -> List[Dict[
             "heading": None if role in ("hook", "closing") else _FALLBACK_HEADINGS.get(role, role.replace("_", " ").title()),
             "target_words": _ROLE_TARGET_WORDS.get(role, 250),
             "assigned_fact_ids": assigned,
+            "key_term_to_define": None,
             "writing_intent": f"deliver the key insight for this {role} section",
             "opening_constraint": "",
         })
@@ -85,7 +86,7 @@ def plan_sections(
     Returns (sections_list, usage).
     Falls back to deterministic plan if LLM fails.
     """
-    arc = analysis.get("arc", "narrative")
+    arc = analysis.get("arc", "instructional")
 
     # Enrich audience signal: prefer brand config over TopicAnalyst inference
     audience_str = analysis.get("audience", "general reader")
@@ -94,11 +95,18 @@ def plan_sections(
         if brand_audience:
             audience_str = brand_audience
 
+    key_terms = analysis.get("key_terms", [])
+    required_concepts = analysis.get("required_concepts", [])
+    audience_level = analysis.get("audience_level", "beginner")
+
     user = SECTION_PLANNER_USER.format(
         title=title,
         content_type=analysis.get("content_type", "explainer"),
+        audience_level=audience_level,
         arc=arc,
         audience=audience_str,
+        key_terms=", ".join(key_terms) if key_terms else "none specified",
+        required_concepts=", ".join(required_concepts) if required_concepts else "none specified",
         primary_angle=analysis.get("primary_angle", ""),
         counterargument_seed=analysis.get("counterargument_seed", ""),
         hook_seed=analysis.get("hook_seed", ""),
@@ -141,6 +149,7 @@ def plan_sections(
             "heading": item.get("heading"),
             "target_words": int(item.get("target_words") or _ROLE_TARGET_WORDS.get(role, 250)),
             "assigned_fact_ids": assigned,
+            "key_term_to_define": item.get("key_term_to_define") or None,
             "writing_intent": str(item.get("writing_intent") or f"deliver the key insight for this {role} section"),
             "opening_constraint": str(item.get("opening_constraint") or ""),
         })
@@ -156,6 +165,7 @@ def plan_sections(
             "heading": None,
             "target_words": _ROLE_TARGET_WORDS["closing"],
             "assigned_fact_ids": [],
+            "key_term_to_define": None,
             "writing_intent": "deliver a single forward-looking observation that crystallizes the article's most important insight",
             "opening_constraint": "",
         })
