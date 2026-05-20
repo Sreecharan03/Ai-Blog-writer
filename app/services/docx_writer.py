@@ -95,6 +95,39 @@ def _add_inline(para, text: str) -> None:
         para.add_run(text[last:])
 
 
+def _is_table_separator(line: str) -> bool:
+    return bool(re.match(r'^\|[\s\-:|]+\|', line.strip()))
+
+
+def _parse_table_row(line: str) -> list:
+    cells = line.strip().strip('|').split('|')
+    return [c.strip() for c in cells]
+
+
+def _add_md_table(doc: Document, rows: list) -> None:
+    """Render a list of row-lists as a proper Word table."""
+    if not rows:
+        return
+    n_cols = max(len(r) for r in rows)
+    table = doc.add_table(rows=0, cols=n_cols)
+    table.style = 'Table Grid'
+
+    for i, row_data in enumerate(rows):
+        tr = table.add_row()
+        for j in range(n_cols):
+            cell = tr.cells[j]
+            para = cell.paragraphs[0]
+            para.paragraph_format.space_after = Pt(2)
+            para.paragraph_format.space_before = Pt(2)
+            cell_text = row_data[j] if j < len(row_data) else ''
+            _add_inline(para, cell_text)
+            if i == 0:
+                for run in para.runs:
+                    run.bold = True
+
+    doc.add_paragraph('')
+
+
 def _add_hr(doc: Document) -> None:
     para = doc.add_paragraph()
     pPr = para._p.get_or_add_pPr()
@@ -148,14 +181,33 @@ def markdown_to_docx(
     tp.paragraph_format.space_after = Pt(14)
     doc.add_paragraph('')
 
+    table_buf: list = []
+
+    def _flush_table():
+        if table_buf:
+            _add_md_table(doc, table_buf)
+            table_buf.clear()
+
     for line in markdown.splitlines():
         stripped = line.strip()
+
+        # Blank line — flush any buffered table, skip the line
         if not stripped:
+            _flush_table()
             continue
 
         # Strip CMS metadata comments — they belong in the CMS, not the Word doc
         if stripped.startswith('<!--') and stripped.endswith('-->'):
             continue
+
+        # Markdown table row
+        if stripped.startswith('|') and stripped.endswith('|'):
+            if not _is_table_separator(stripped):
+                table_buf.append(_parse_table_row(stripped))
+            continue  # separator rows are skipped entirely
+
+        # Any non-table line — flush buffered table first
+        _flush_table()
 
         if stripped.startswith('### '):
             h = re.sub(r'\*+(.+?)\*+', r'\1', clean(stripped[4:]))
@@ -182,6 +234,9 @@ def markdown_to_docx(
             _add_inline(doc.add_paragraph(style='Quote'), stripped[2:])
         else:
             _add_inline(doc.add_paragraph(), stripped)
+
+    # Flush any table that ends at the last line
+    _flush_table()
 
     if isinstance(dest, Path):
         dest.parent.mkdir(parents=True, exist_ok=True)
