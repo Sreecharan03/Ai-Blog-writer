@@ -51,17 +51,51 @@ def _format_instruction(role: str, heading: Optional[str]) -> str:
             "The assembler adds those automatically — your job is the opening paragraphs only."
         )
     if role == "faq":
-        h = heading or "FAQ"
+        h = heading or "Common Questions"
         return (
             f"Start output with: ## {h}\n\n"
             "Then write Q&A pairs DIRECTLY — no intro paragraph, no preamble sentence before the first question. "
             "Format each pair as: **Bold question** on its own line, then the answer paragraph (2-4 sentences). "
-            "5-7 pairs. No transitional text between pairs."
+            "6-10 pairs. Questions must be real things the reader would Google — not obvious definitions. "
+            "No transitional text between pairs."
+        )
+    if role == "steps":
+        h = heading or "How to Get Started"
+        return (
+            f"Start output with: ## {h}\n\n"
+            "One short intro sentence (max 15 words). "
+            "Then numbered steps — each step starts with a verb and is a complete, specific action. "
+            "After the steps, 1-2 sentences of closing insight. No bullet lists — numbered only."
+        )
+    if role == "types":
+        h = heading or "Types"
+        return (
+            f"Start output with: ## {h}\n\n"
+            "Brief intro sentence. Then describe each type with: bold name, one-sentence definition, "
+            "specific example or number, and 'Ideal for:' one sentence. "
+            "Use markdown bold for type names. 3-6 types maximum."
         )
     if role == "practical":
+        h = heading or "How to Get Started"
         return (
-            f"{'## ' + heading + chr(10) if heading else ''}"
-            "Markdown. One short intro sentence, then bullet list for steps, then 1-2 closing analytical sentences."
+            f"Start output with: ## {h}\n\n"
+            "One short intro sentence. Then numbered or bulleted steps — each a specific action. "
+            "End with 1-2 sentences of practical insight, not a warning."
+        )
+    if role == "comparison":
+        h = heading or "Direct Comparison"
+        return (
+            f"Start output with: ## {h}\n\n"
+            "MUST include a markdown comparison table. After the table, write a clear verdict sentence "
+            "that states which option suits which reader — no hedging."
+        )
+    if role == "decision_guide":
+        h = heading or "Which Should You Choose?"
+        return (
+            f"Start output with: ## {h}\n\n"
+            "Give clear decision rules based on the reader's situation. "
+            "Format as: 'If [condition] → choose [option].' No hedging. "
+            "Cover 3-5 real decision scenarios."
         )
     prefix = f"## {heading}\n\n" if heading else ""
     return f"Start output with: {prefix}Then write flowing prose paragraphs."

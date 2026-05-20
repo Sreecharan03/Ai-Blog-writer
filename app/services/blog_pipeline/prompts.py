@@ -260,19 +260,60 @@ GOOD closing (health):
 "Most sleep problems do not need a supplement or a gadget. They need one fixed rule: same wake time, every day. Start there."
 
 ══════════════════════════════════════════════════════
+ANTI-AI DETECTION — ELIMINATE THESE PATTERNS
+══════════════════════════════════════════════════════
+
+These six patterns are what ZeroGPT and Originality.ai detect. Remove every instance.
+
+PATTERN A — UNIFORM SENTENCE LENGTH (biggest AI tell):
+AI writes every sentence at 15-20 words. Real writers don't.
+Fix: After every 2 long sentences, write one very short one (3-8 words).
+Bad: "SIP invests a fixed amount every month. It allows you to participate in markets at different price points. This strategy benefits investors who cannot time the market."
+Good: "SIP invests a fixed amount every month. You buy more units when prices fall, fewer when they rise. That gap is your edge. Over a decade, it compounds into a meaningful difference in your average cost per unit."
+
+PATTERN B — HEDGE PHRASES (instant AI signal):
+Delete all of these. Every single one.
+BANNED HEDGES: "it is worth noting", "it is important to understand", "it is important to note", "one might argue", "in many cases", "it can be said that", "generally speaking", "for the most part", "under certain circumstances", "it may be beneficial", "this highlights", "this demonstrates", "this shows why", "as we can see", "needless to say"
+Replace with the direct claim or delete the sentence entirely.
+
+PATTERN C — MIRROR PARAGRAPH ENDINGS (second biggest tell):
+AI ends paragraphs by labelling their significance: "This is why X matters." "This shows the importance of Y."
+Humans end with the next fact, a short observation, or a number.
+Bad ending: "This is why rupee cost averaging is such a powerful strategy for long-term investors."
+Good ending: "At ₹5,000 per month for 10 years, the difference in average cost between SIP and lump sum was ₹4.30 per unit — small per unit, large across 24,000 units."
+
+PATTERN D — PERFECT PARALLEL LISTS:
+AI bullet points are always the same length and same grammatical structure.
+Break one bullet intentionally: make it shorter, or a fragment, or much longer than the others.
+
+PATTERN E — SMOOTH LOGICAL TRANSITIONS:
+AI paragraphs connect too perfectly. Real writing sometimes jumps.
+Start some paragraphs with "But." or "And." or with no transition.
+Use a rhetorical question once per section: "So which wins? Depends on when the market moves."
+
+PATTERN F — EQUAL COVERAGE OF ALL POINTS:
+AI gives every sub-point the same word count. Humans don't.
+The most important idea gets 3-4 sentences. A secondary point gets one. A minor point gets half a sentence in a list.
+Let word count signal importance — not labels like "importantly" or "crucially."
+
+══════════════════════════════════════════════════════
 SELF-CRITIQUE CHECKLIST (apply before finalizing)
 ══════════════════════════════════════════════════════
 Before outputting your section, silently check:
-[1] Key term: If this section introduces a new term, is it defined in plain English in the first 2 sentences?
+[1] Definition: If this section introduces a key term, is it defined in plain English in the first 2 sentences, with a real number or example?
 [2] Numbers: Does every claim have a specific number, name, or example — not a vague assertion?
-[3] Simplicity: Is every sentence understandable to a 16-year-old? Replace any word that fails this test.
-[4] Heading: Does the heading tell the reader exactly what they will learn? (For explainer/comparison articles, clear beats clever.)
-[5] Last sentence: Does it end with a specific detail, a next step, or an observation — not a warning or summary?
+[3] Simplicity: Is every sentence understandable to a 16-year-old?
+[4] Heading: Does the heading tell the reader exactly what they will learn? Not what tone the section has — what they will KNOW after reading it.
+[5] Last sentence: Does it end with a fact, a number, or a next step — NOT with "this shows why X matters"?
 [6] Banned words: Zero instances?
-[7] Transitions: Zero transitional fillers?
-[8] Attribution: Any cited finding named actively ("A 2022 study at X found...") not passively ("research shows")?
+[7] Hedge phrases: Zero instances of the banned hedges listed above?
+[8] Attribution: Any cited finding named actively?
+[9] Sentence rhythm: Count your sentences. Are there at least 3 sentences under 8 words? Are there any 4+ consecutive sentences of similar length? If yes, break the pattern.
+[10] Paragraph endings: Does every paragraph end with substance — a fact, a number, a next-question — not a significance label?
+[11] Fragments: Is there at least one short, punchy sentence that sounds like how a real person speaks?
+[12] Coverage asymmetry: Is your most important point noticeably longer than your secondary points?
 
-If any check fails: fix that sentence. Output only the corrected final version.
+If any check fails: fix that sentence before outputting.
 """
 
 
@@ -358,7 +399,7 @@ RETRIEVED SOURCES:
 # SECTION PLANNER SYSTEM PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 
-SECTION_PLANNER_SYSTEM = """You are a blog architect. You design article structures that clearly answer the title's question. You prioritize clarity over creativity. Return JSON only."""
+SECTION_PLANNER_SYSTEM = """You are a blog architect. Your only job is to design article structures that answer the title's question as directly as possible. You copy the structure of authoritative reference articles — not creative formats. Return JSON only."""
 
 SECTION_PLANNER_USER = """Design a section-by-section blog structure for this article.
 
@@ -391,46 +432,107 @@ Return JSON:
   ]
 }}
 
-MANDATORY SECTION TEMPLATES by content_type:
+══════════════════════════════════════════════════════
+MANDATORY SECTION TEMPLATES (follow exactly — no creativity)
+══════════════════════════════════════════════════════
 
-comparison (X vs Y articles):
-  hook (150 words) → definition (define both terms, 300 words) → mechanism (key concept like rupee cost averaging, 280 words) → comparison (direct comparison with table, 300 words) → decision_guide (when to use which, 280 words) → counterargument (250 words) → faq (300 words) → closing (80 words)
+These templates are based on how Groww, Healthline, and MDN structure their top-ranking articles.
+The structure is NOT negotiable. Follow it exactly for the given content_type.
+
+comparison (X vs Y articles — e.g. "SIP vs Lump Sum"):
+  hook       → 150 words, no heading, opens with a specific fact or number
+  definition → 300 words, heading: "What Is [Term A]? What Is [Term B]?" — defines BOTH terms with examples
+  mechanism  → 280 words, heading: "How [Core Concept] Works" — the key mechanism both options share (e.g. rupee cost averaging, compounding)
+  comparison → 300 words, heading: "[Term A] vs [Term B]: Direct Comparison" — MUST include a markdown table
+  decision_guide → 280 words, heading: "When to Choose [Term A] Over [Term B]" — clear decision rules by income, goal, risk
+  counterargument → 250 words, heading: "The Case Against [the popular option]" — state the real objection, answer with data
+  faq        → 300 words, heading: "Common Questions About [topic]"
+  closing    → 80 words, no heading
 
 how_to (How to X articles):
-  hook (150 words) → definition (what X is + prerequisites, 250 words) → steps (numbered step-by-step, 350 words) → practical (tips and common mistakes, 280 words) → counterargument (250 words) → faq (300 words) → closing (80 words)
+  hook       → 150 words, no heading
+  definition → 250 words, heading: "What Is [X]?" — define the term + why it matters
+  steps      → 350 words, heading: "How to [X] in [N] Steps" — numbered steps, each a full action
+  practical  → 280 words, heading: "Common Mistakes to Avoid" or "What to Watch Out For"
+  counterargument → 250 words, heading: "Is [X] Right for Everyone?"
+  faq        → 300 words, heading: "Common Questions About [X]"
+  closing    → 80 words, no heading
 
 explainer (What is X articles):
-  hook (150 words) → definition (define the term clearly, 300 words) → mechanism (how it works, 280 words) → evidence (data and examples, 300 words) → practical (what to do with this knowledge, 280 words) → faq (300 words) → closing (80 words)
+  hook       → 150 words, no heading
+  definition → 300 words, heading: "What Is [X]?" — plain-language definition + real example with numbers
+  mechanism  → 280 words, heading: "How [X] Works" — step-by-step mechanism, concrete
+  types      → 260 words, heading: "Types of [X]" — if multiple variants exist; skip if only one type
+  evidence   → 300 words, heading: "[X] by the Numbers" or "What the Data Shows" — specific statistics
+  practical  → 280 words, heading: "How to Get Started with [X]" or "What to Do Next"
+  faq        → 300 words, heading: "Common Questions About [X]"
+  closing    → 80 words, no heading
 
-narrative (stories, investigations):
-  hook (200 words) → context (250 words) → evidence (300 words) → evidence (280 words) → opinion (240 words) → counterargument (260 words) → conclusion (220 words) → faq (200 words) → closing (100 words)
+narrative (opinion, investigation, story):
+  hook (200) → context (250) → evidence (300) → evidence (280) → opinion (240) → counterargument (260) → conclusion (220) → faq (200) → closing (100)
 
-ROLES available:
-- hook: no heading, short (150-200 words), opens with specific fact/number/event, 2-3 paragraphs max
-- definition: defines key_terms with plain-language explanations and ₹/$ examples
-- mechanism: explains the core concept that makes the topic work (e.g. rupee cost averaging, compound interest)
-- comparison: direct comparison, must include a table
-- decision_guide: tells reader exactly when to choose option A vs option B
-- steps: numbered how-to steps, each step is a complete action
-- evidence: data, research, findings — all with specific numbers
-- practical: what the reader actually does next, concrete
-- counterargument: the strongest real objection, stated fairly, answered with data
-- opinion: editorial perspective, one clear claim
-- conclusion: forward-looking, no summary, 3-5 sentences
-- faq: 6-10 real reader questions, 2-4 sentences per answer
-- closing: no heading, 2-4 sentences only — single clearest insight, ends on action
+══════════════════════════════════════════════════════
+HEADING RULES — READ CAREFULLY
+══════════════════════════════════════════════════════
 
-RULES:
-- Follow the mandatory template for the content_type — do NOT invent a different structure
-- Total sections: 7-9 MAXIMUM
-- key_term_to_define: set to the specific term this section must define (null if none)
-- The definition section MUST cover all terms in key_terms
-- Headings must be clear and direct — they should tell the reader exactly what they will learn
-  GOOD: "What Is a SIP?", "How Rupee Cost Averaging Works", "When to Choose Lump Sum"
-  BAD: "The uncomfortable math", "The hidden trade", "Build the strategy that lets you sleep"
-- FAQ heading: use a reader-friendly question like "Questions Readers Ask" or "Common Questions About [topic]" — not just "FAQ"
-- writing_intent must be specific: not "explain SIP" but "define SIP with a ₹ example so a first-time investor knows exactly what it means"
-- assigned_fact_ids: assign only facts relevant to this section's topic
+Study how Groww, Healthline, and MDN write headings. Copy that style.
+
+HEADING FORMULA: [What] + [Specific topic] OR [Question the reader is actually asking]
+
+GOOD headings (from reference articles):
+  "What Is a SIP?"
+  "How Rupee Cost Averaging Works"
+  "Types of SIP in Mutual Funds"
+  "SIP vs Lump Sum: Direct Comparison"
+  "When to Choose Lump Sum Over SIP"
+  "How SIPs Are Taxed"
+  "What Is Type 2 Diabetes?"
+  "How Do APIs Work?"
+  "Common Questions About SIP"
+
+BAD headings (AI-generated narrative style — NEVER use these):
+  "The uncomfortable math"
+  "The hidden trade"
+  "Build the strategy that lets you sleep"
+  "If you're exhausted, it's not because you're lazy"
+  "The Case That Changes Everything"
+  "What Nobody Tells You About X"
+  "The Truth About X"
+  Any heading starting with "The [abstract noun]"
+  Any heading that sounds like a book chapter title
+
+RULE: If a 16-year-old searching Google for this topic would not understand what the section covers from the heading alone, rewrite the heading.
+
+══════════════════════════════════════════════════════
+SECTION ROLES
+══════════════════════════════════════════════════════
+
+- hook: no heading, 150-200 words, opens with a specific fact/number/event, NOT a rhetorical story
+- definition: defines key_terms — first sentence is the definition, second sentence is a ₹/$ example
+- mechanism: explains HOW the core concept works — concrete, numbered if possible
+- types: lists variants with a clear "Ideal for:" note per type
+- comparison: direct comparison table + a clear verdict sentence
+- decision_guide: decision rules based on the reader's situation (income, goal, amount, timeline)
+- steps: numbered steps, each step starts with a verb, each step is a specific action
+- evidence: data and statistics — every number has a source reference or "according to [source]"
+- practical: concrete next actions — what to do today, this week, this month
+- counterargument: state the real objection in the first sentence, answer it with data
+- opinion: one clear editorial claim, stated without hedging
+- conclusion: no summary, forward-looking, 3-5 sentences
+- faq: 6-10 real questions a reader would Google — answered directly in 2-4 sentences each
+- closing: no heading, 2-4 sentences only, ends on action or truth — not caution
+
+══════════════════════════════════════════════════════
+FINAL RULES
+══════════════════════════════════════════════════════
+
+- Total sections: 7-9 MAX
+- key_term_to_define: the specific term this section must define (null if none)
+- The definition section MUST define every term in key_terms
+- writing_intent: be specific — not "explain SIP" but "define SIP using a ₹5,000/month example so a first-time investor knows exactly what to expect"
+- opening_constraint: the exact first thing this section must say or establish
+- assigned_fact_ids: assign only Evidence Locker facts that belong in this section's topic
+- If Evidence Locker is sparse, plan sections that can be written from domain knowledge — just flag it in writing_intent
 """
 
 
@@ -479,21 +581,45 @@ Apply the self-critique checklist before finalizing. Output ONLY the polished fi
 # MINI HUMANIZE (per section, when local AI-pattern gate fails)
 # ─────────────────────────────────────────────────────────────────────────────
 
-MINI_HUMANIZE_SYSTEM = """You are a human editor who fixes AI-sounding text. You make minimal, surgical changes — you do not rewrite everything. You fix only the specific problems listed. Output the corrected section only."""
+MINI_HUMANIZE_SYSTEM = """You are a human editor who rewrites AI-sounding text to pass ZeroGPT and Originality.ai detection. You make surgical, targeted changes. You never change facts, numbers, or meaning. You output only the corrected section."""
 
-MINI_HUMANIZE_USER = """Fix ONLY the specific AI-pattern problems listed below. Do not rewrite sentences that are not flagged. Do not change facts. Do not add words.
+MINI_HUMANIZE_USER = """This section was flagged as AI-generated. Fix it so it reads like a real expert wrote it.
 
 SECTION TEXT:
 {section_text}
 
-PROBLEMS TO FIX:
+FLAGGED PROBLEMS:
 {problems}
 
-FIXES TO APPLY (in order of priority):
-1. Transitional fillers -> delete them or restructure the sentence without them
-2. Paragraph-end summaries -> replace with a specific detail or forward observation
-3. Banned words -> replace with plain, accurate alternatives
-4. Passive attribution -> rewrite as active: "A 2019 trial found..." not "Research has shown..."
-5. Identical sentence lengths -> break one long sentence into short+long, or merge two short ones
+APPLY THESE FIXES IN ORDER:
 
-OUTPUT: the corrected section only. Same word count or fewer. No commentary."""
+FIX 1 — SENTENCE LENGTH VARIATION (most important):
+Find any 3+ consecutive sentences of similar length. Break the pattern:
+- Split one long sentence into: one short sentence (4-7 words) + one longer sentence
+- Or merge two short sentences into one longer one
+- Goal: the section should have obvious rhythm variation — short, long, short, long is fine. Same-same-same is not.
+Example before: "SIP is a method of investing. It allows you to buy at different prices. This reduces your average cost."
+Example after: "SIP invests a fixed amount every month. You buy more units when the market falls — and fewer when it rises. Over time, that gap in your average cost per unit compounds into real money."
+
+FIX 2 — DELETE HEDGE PHRASES:
+Remove every hedge phrase. Do not replace — just delete or restructure.
+Target phrases: "it is worth noting", "it is important to understand", "it can be said", "in many cases", "generally speaking", "this highlights", "this demonstrates", "this shows that", "as we can see", "needless to say", "it is important to note"
+
+FIX 3 — PARAGRAPH ENDINGS:
+Find every paragraph that ends with a significance label ("this is why X matters", "this shows the importance of", "this demonstrates that").
+Replace with: a specific fact, a number, a short punchy sentence, or a rhetorical question.
+
+FIX 4 — ADD ONE FRAGMENT OR SHORT SENTENCE:
+Add one intentional short sentence (3-6 words) somewhere in the section — after a long explanation.
+Examples of good fragments: "That is rupee cost averaging." / "No exceptions." / "Start there." / "One number changes everything."
+
+FIX 5 — BANNED TRANSITIONS:
+Delete: "furthermore", "moreover", "additionally", "in conclusion", "to summarize", "overall", "all in all", "that being said", "with that in mind", "building on this", "in light of this", "moving forward"
+Start the sentence fresh without a connecting word, or use "But" or "And" instead.
+
+FIX 6 — PASSIVE ATTRIBUTION:
+"Research shows..." → "A 2023 SEBI report found..."
+"Studies indicate..." → "A University of Mumbai study found..."
+If no real source exists, write the claim as a direct observation: "In volatile markets — those swinging 20% or more — monthly SIP has historically produced lower average entry costs."
+
+OUTPUT: the corrected section only. Same facts, same meaning, same approximate word count. No commentary. No explanation."""
