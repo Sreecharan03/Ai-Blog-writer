@@ -161,6 +161,9 @@ class PipelineCreateRequest(BaseModel):
     zerogpt_fix_max_attempts: int = Field(4, ge=1, le=8)
     max_quality_retries: int = Field(4, ge=0, le=10)
 
+    # Tavily real-time research
+    use_tavily: bool = False  # inject domain facts via Tavily before evidence locker
+
     # Reuse existing
     request_id: Optional[str] = None  # reuse existing article request
 
@@ -436,6 +439,7 @@ def start_pipeline(
         "zerogpt_fix_max_attempts": req.zerogpt_fix_max_attempts,
         "max_quality_retries": req.max_quality_retries,
         "length_target": req.length_target,
+        "use_tavily": req.use_tavily,
         "request_id": req.request_id,
         "qc_pass": False,
         "zerogpt_pass": False,
@@ -569,6 +573,7 @@ def resume_pipeline(
         "zerogpt_fix_max_attempts": cfg.get("zerogpt_fix_max_attempts", 4),
         "max_quality_retries": cfg.get("max_quality_retries", 4),
         "length_target": cfg.get("length_target", 2000),
+        "use_tavily": cfg.get("use_tavily", False),
         "request_id": cfg.get("request_id"),
         "qc_pass": False,
         "zerogpt_pass": False,

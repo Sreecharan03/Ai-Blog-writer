@@ -749,6 +749,174 @@ el('gcsUriInput').addEventListener('input', () => {
   }
 });
 
+// ─── Article Generation ───────────────────────────────────
+const artState = { pipelineId: null, requestId: null, pollTimer: null };
+
+// URL list management
+function addUrlRow(value = '') {
+  const row = document.createElement('div');
+  row.className = 'art-url-row';
+  row.innerHTML = `
+    <input type="text" class="cfg-input art-url-input" placeholder="https://example.com/article" value="${escapeHtml(value)}" />
+    <button class="art-url-remove" title="Remove">✕</button>
+  `;
+  row.querySelector('.art-url-remove').addEventListener('click', () => row.remove());
+  el('artUrlList').appendChild(row);
+}
+
+el('btnAddUrl').addEventListener('click', () => addUrlRow());
+// Start with one empty URL row
+addUrlRow();
+
+function getArticleUrls() {
+  return [...document.querySelectorAll('.art-url-input')]
+    .map(i => i.value.trim())
+    .filter(Boolean);
+}
+
+// Tavily toggle label
+el('artUseTavily').addEventListener('change', () => {
+  el('tavilyDesc').textContent = el('artUseTavily').checked
+    ? 'ON — Tavily injects real-time domain facts before writing'
+    : 'OFF — uses only your provided URLs as sources';
+});
+
+// Generate article
+el('btnGenerateArticle').addEventListener('click', async () => {
+  if (!requireConfig()) return;
+  const title = el('artTitle').value.trim();
+  if (!title) { toast('Enter an article title', 'warning'); return; }
+
+  const keywords = el('artKeywords').value.split(',').map(k => k.trim()).filter(Boolean);
+  const urls = getArticleUrls();
+  const useTavily = el('artUseTavily').checked;
+  const targetWords = parseInt(el('artWords').value) || 2000;
+
+  // Reset status card
+  el('artStatusCard').style.display = 'block';
+  el('artPipelineId').textContent = '—';
+  el('artStatus').textContent = 'Starting…';
+  el('artStatus').className = 'badge';
+  el('artStep').textContent = '—';
+  el('artWordCount').textContent = '—';
+  el('artWarnings').style.display = 'none';
+  el('btnPollStatus').style.display = 'none';
+  el('btnDownloadDocx').style.display = 'none';
+
+  const spin = el('spin-article'); spin.className = 'spinner active';
+  el('btnGenerateArticle').disabled = true;
+  const t = toast('Starting article pipeline…', 'info', 0);
+
+  const body = {
+    kb_id: getKb(),
+    title,
+    keywords,
+    length_target: targetWords,
+    use_tavily: useTavily,
+    skip_crawl: urls.length === 0,
+    urls,
+  };
+  if (urls.length === 1) { body.url = urls[0]; body.urls = []; }
+
+  try {
+    const { ok, status, data } = await apiFetch('POST', '/api/v1/articles/pipeline', { body, timeoutMs: 30000 });
+    removeToast(t);
+    if (!ok) {
+      toast('Pipeline start failed: ' + (data.detail || status), 'error');
+      spin.className = 'spinner'; el('btnGenerateArticle').disabled = false;
+      return;
+    }
+    artState.pipelineId = data.pipeline_id;
+    el('artPipelineId').textContent = data.pipeline_id;
+    el('artStatus').textContent = 'running';
+    el('btnPollStatus').style.display = 'inline-flex';
+    toast('Pipeline started — polling every 15s', 'success');
+    startArticlePoll();
+  } catch (e) {
+    removeToast(t);
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    spin.className = 'spinner'; el('btnGenerateArticle').disabled = false;
+  }
+});
+
+function startArticlePoll() {
+  if (artState.pollTimer) clearInterval(artState.pollTimer);
+  pollArticleStatus();
+  artState.pollTimer = setInterval(pollArticleStatus, 15000);
+}
+
+async function pollArticleStatus() {
+  if (!artState.pipelineId) return;
+  try {
+    const { ok, data } = await apiFetch('GET', `/api/v1/articles/pipeline/${artState.pipelineId}`, { timeoutMs: 20000 });
+    if (!ok) return;
+    updateArticleStatus(data);
+  } catch (e) {
+    // network blip — keep polling
+  }
+}
+
+function updateArticleStatus(data) {
+  const ps = data.pipeline_status || '';
+  el('artStatus').textContent = ps;
+  el('artStatus').className = 'badge badge-' + (
+    ps.includes('completed') ? 'done' :
+    ps === 'failed' || ps === 'timed_out' ? 'error' : 'running'
+  );
+  el('artStep').textContent = data.current_step || '—';
+
+  const rs = data.result_summary || {};
+  if (rs.word_count) el('artWordCount').textContent = rs.word_count + ' words';
+
+  // Warnings
+  const warns = rs.warning ? [rs.warning] : (rs.warnings || []);
+  if (warns.length) {
+    el('artWarnings').style.display = 'block';
+    el('artWarnings').innerHTML = '<strong>Warnings:</strong> ' + warns.map(w => escapeHtml(w)).join('<br>');
+  }
+
+  // Store request_id for download
+  if (data.request_id) artState.requestId = data.request_id;
+
+  // Terminal states
+  if (ps === 'completed' || ps === 'completed_with_warnings') {
+    clearInterval(artState.pollTimer);
+    el('btnDownloadDocx').style.display = 'inline-flex';
+    toast('Article ready! Click Download to get the .docx', 'success', 6000);
+  } else if (ps === 'failed' || ps === 'timed_out') {
+    clearInterval(artState.pollTimer);
+    toast('Pipeline ' + ps + (data.error_detail ? ': ' + data.error_detail : ''), 'error', 8000);
+  }
+}
+
+el('btnPollStatus').addEventListener('click', pollArticleStatus);
+
+el('btnDownloadDocx').addEventListener('click', async () => {
+  if (!artState.requestId) { toast('No request ID yet — wait for completion', 'warning'); return; }
+  const url = `${getBase()}/api/v1/articles/requests/${artState.requestId}/download`;
+  const a = document.createElement('a');
+  a.href = url;
+  // Bearer token via fetch then blob — direct link won't carry auth header
+  const t = toast('Downloading…', 'info', 0);
+  try {
+    const resp = await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(60000) });
+    removeToast(t);
+    if (!resp.ok) { toast('Download failed: ' + resp.status, 'error'); return; }
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objUrl;
+    link.download = (el('artTitle').value.trim() || 'article').replace(/[^a-z0-9]/gi, '_') + '.docx';
+    link.click();
+    URL.revokeObjectURL(objUrl);
+    toast('Downloaded!', 'success');
+  } catch (e) {
+    removeToast(t);
+    toast('Download error: ' + e.message, 'error');
+  }
+});
+
 // ─── Init ─────────────────────────────────────────────────
 loadConfig();
 updateTokenStatus();

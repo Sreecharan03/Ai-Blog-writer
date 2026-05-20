@@ -61,6 +61,7 @@ class PipelineState(TypedDict, total=False):
     max_predictability_rewrite_passes: int
     zerogpt_fix_max_attempts: int
     max_quality_retries: int
+    use_tavily: bool
 
     # ── Carried between steps ──
     request_id: Optional[str]
@@ -395,6 +396,7 @@ def draft_node(state: PipelineState) -> dict:
         hybrid_top_k_per_query=state.get("hybrid_top_k_per_query", 30),
         predictability_top_n=state.get("predictability_top_n", 14),
         max_predictability_rewrite_passes=state.get("max_predictability_rewrite_passes", 1),
+        use_tavily=state.get("use_tavily", False),
     )
 
     claims = _make_claims(state)

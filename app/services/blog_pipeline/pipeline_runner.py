@@ -17,6 +17,7 @@ from openai import OpenAI
 
 from .agent_topic_analyst import analyze_topic
 from .agent_evidence_locker import build_evidence_locker
+from .agent_tavily_researcher import research_with_tavily
 from .agent_section_planner import plan_sections
 from .agent_section_writer import write_section
 from .agent_tone_reviewer import review_section_tone
@@ -45,6 +46,7 @@ def run_blog_pipeline(
     sources: List[Dict[str, Any]],
     target_words: int = 2000,
     brand_context: Optional[BrandContext] = None,
+    use_tavily: bool = False,
 ) -> Dict[str, Any]:
     """
     Full pipeline. Returns result dict with:
@@ -55,15 +57,20 @@ def run_blog_pipeline(
     warnings: List[str] = []
     all_usage: Dict[str, int] = {"prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
-    # ── Phase 1A: Topic Analyst + Evidence Locker in parallel ────────────────
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        fut_analysis = pool.submit(analyze_topic, client, model, title, keywords)
-        fut_locker = pool.submit(build_evidence_locker, client, model, sources)
+    # ── Phase 1A: Topic Analyst (needed first so Tavily uses its key_terms) ──
+    analysis, analysis_usage = analyze_topic(client, model, title, keywords)
+    all_usage = _sum_usage(all_usage, analysis_usage)
 
-        analysis, analysis_usage = fut_analysis.result()
-        facts, is_sparse, locker_usage = fut_locker.result()
+    # ── Phase 1B: Tavily research (if enabled) — runs before EvidenceLocker ──
+    all_sources = list(sources)
+    if use_tavily:
+        tavily_sources = research_with_tavily(title, keywords, analysis)
+        # Tavily sources prepended so EvidenceLocker sees them first
+        all_sources = tavily_sources + all_sources
 
-    all_usage = _sum_usage(all_usage, analysis_usage, locker_usage)
+    # ── Phase 1C: Evidence Locker ─────────────────────────────────────────────
+    facts, is_sparse, locker_usage = build_evidence_locker(client, model, all_sources)
+    all_usage = _sum_usage(all_usage, locker_usage)
 
     if is_sparse:
         warnings.append(f"sparse_evidence: only {len(facts)} facts extracted — sections will supplement with general knowledge")

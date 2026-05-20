@@ -1999,6 +1999,7 @@ class RunRequest(BaseModel):
     rag_grounding_ratio: float = 0.60
     enable_agentic_orchestration: bool = True
     use_blog_pipeline: bool = True   # multi-agent section-based pipeline
+    use_tavily: bool = False          # inject real-time domain facts via Tavily
     predictability_top_n: int = 14
     max_predictability_rewrite_passes: int = 1
 
@@ -2246,6 +2247,7 @@ def run_article_request(
                     sources=used_sources,
                     target_words=int(length_target),
                     brand_context=brand_ctx,
+                    use_tavily=getattr(req, "use_tavily", False),
                 )
                 compose_usage = blog_result.get("usage", {})
                 compose_meta = {

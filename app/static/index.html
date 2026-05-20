@@ -117,6 +117,7 @@
   <!-- Tabs -->
   <nav class="tabs-nav">
     <button class="tab-btn active" data-tab="pipeline">🔧 Pipeline</button>
+    <button class="tab-btn" data-tab="article">✍ Article</button>
     <button class="tab-btn" data-tab="search">🔍 Search</button>
     <button class="tab-btn" data-tab="logs">📋 Logs</button>
     <button class="tab-btn" data-tab="artifacts">📦 Artifacts</button>
@@ -262,6 +263,83 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ======================== TAB: Article ======================== -->
+  <div class="tab-pane" id="tab-article">
+
+    <!-- Article form -->
+    <div class="section-card">
+      <div class="section-title"><span class="section-icon">✍</span> Generate Article</div>
+
+      <div class="form-row">
+        <div class="form-group flex-2">
+          <label class="config-label">ARTICLE TITLE</label>
+          <input type="text" id="artTitle" class="cfg-input" placeholder="e.g. SIP vs Lump Sum: Which is Better?" />
+        </div>
+        <div class="form-group flex-1">
+          <label class="config-label">TARGET WORDS</label>
+          <input type="number" id="artWords" class="cfg-input" value="2000" min="1500" max="3500" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="config-label">KEYWORDS (comma-separated)</label>
+        <input type="text" id="artKeywords" class="cfg-input" placeholder="e.g. SIP, lump sum, mutual fund, rupee cost averaging" />
+      </div>
+
+      <!-- External source URLs -->
+      <div class="form-group">
+        <label class="config-label">EXTERNAL SOURCE URLS</label>
+        <div id="artUrlList"></div>
+        <button class="btn btn-outline btn-sm" id="btnAddUrl" style="margin-top:6px;">+ Add URL</button>
+      </div>
+
+      <!-- Tavily toggle -->
+      <div class="form-group" style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+        <label class="config-label" style="margin:0;">USE TAVILY RESEARCH</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="artUseTavily" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="toggle-desc" id="tavilyDesc">ON — Tavily injects real-time domain facts before writing</span>
+      </div>
+
+      <div style="margin-top:16px;">
+        <button class="btn btn-gradient" id="btnGenerateArticle">
+          <span>⚡ Generate Article</span>
+          <div class="spinner" id="spin-article"></div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Status card (shown after generation starts) -->
+    <div class="section-card" id="artStatusCard" style="display:none;">
+      <div class="section-title"><span class="section-icon">📡</span> Pipeline Status</div>
+      <div class="art-status-row">
+        <span class="config-label">Pipeline ID:</span>
+        <span id="artPipelineId" class="doc-id-val">—</span>
+      </div>
+      <div class="art-status-row" style="margin-top:6px;">
+        <span class="config-label">Status:</span>
+        <span id="artStatus" class="badge">—</span>
+      </div>
+      <div class="art-status-row" style="margin-top:6px;">
+        <span class="config-label">Step:</span>
+        <span id="artStep">—</span>
+      </div>
+      <div class="art-status-row" style="margin-top:6px;">
+        <span class="config-label">Word Count:</span>
+        <span id="artWordCount">—</span>
+      </div>
+      <div id="artWarnings" style="margin-top:8px;display:none;" class="artifact-note"></div>
+
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" id="btnPollStatus" style="display:none;">↺ Refresh Status</button>
+        <button class="btn btn-gradient btn-sm" id="btnDownloadDocx" style="display:none;">⬇ Download .docx</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- ======================== TAB: Search ======================== -->
